@@ -16,6 +16,8 @@ pub enum StreamError {
     ParseError(#[from] serde_json::Error),
     #[error("Process stdout not available")]
     NoStdout,
+    #[error("Failed to read from stream: {0}")]
+    ReadError(std::io::Error),
 }
 
 /// Spawn Claude Code in non-interactive mode.
@@ -44,6 +46,10 @@ pub fn parse_event(line: &str) -> Result<ClaudeEvent, StreamError> {
 
 /// Read events from Claude process stdout.
 ///
+/// # Warning
+/// This function takes ownership of the child's stdout handle.
+/// It can only be called once per `Child` instance.
+///
 /// # Errors
 ///
 /// Returns `StreamError::NoStdout` if stdout is not available.
@@ -60,7 +66,7 @@ pub fn read_events(
                 Some((event, reader))
             }
             Ok(None) => None,
-            Err(e) => Some((Err(StreamError::SpawnError(e)), reader)),
+            Err(e) => Some((Err(StreamError::ReadError(e)), reader)),
         }
     }))
 }

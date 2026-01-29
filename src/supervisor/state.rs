@@ -52,19 +52,31 @@ impl SessionStateMachine {
     }
 
     pub fn record_tool_call(&mut self) {
-        self.tool_calls += 1;
+        self.tool_calls = self.tool_calls.saturating_add(1);
     }
 
     pub fn record_approval(&mut self) {
-        self.approvals += 1;
+        self.approvals = self.approvals.saturating_add(1);
     }
 
     pub fn record_denial(&mut self) {
-        self.denials += 1;
+        self.denials = self.denials.saturating_add(1);
     }
 
     #[must_use]
-    pub fn stats(&self) -> (usize, usize, usize) {
-        (self.tool_calls, self.approvals, self.denials)
+    pub fn stats(&self) -> SessionStats {
+        SessionStats {
+            tool_calls: self.tool_calls,
+            approvals: self.approvals,
+            denials: self.denials,
+        }
     }
+}
+
+/// Session statistics.
+#[derive(Debug, Clone, Copy)]
+pub struct SessionStats {
+    pub tool_calls: usize,
+    pub approvals: usize,
+    pub denials: usize,
 }

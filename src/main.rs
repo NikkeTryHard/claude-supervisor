@@ -1,10 +1,27 @@
 //! Claude Supervisor - Automated Claude Code with AI oversight.
 
-use clap::{Parser, Subcommand};
-use tracing_subscriber::{EnvFilter, fmt, prelude::*};
+use clap::{Parser, Subcommand, ValueEnum};
+use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use claude_supervisor::config::SupervisorConfig;
 use claude_supervisor::supervisor::PolicyLevel;
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum PolicyArg {
+    Permissive,
+    Moderate,
+    Strict,
+}
+
+impl From<PolicyArg> for PolicyLevel {
+    fn from(arg: PolicyArg) -> Self {
+        match arg {
+            PolicyArg::Permissive => PolicyLevel::Permissive,
+            PolicyArg::Moderate => PolicyLevel::Moderate,
+            PolicyArg::Strict => PolicyLevel::Strict,
+        }
+    }
+}
 
 #[derive(Parser)]
 #[command(
@@ -24,8 +41,8 @@ enum Commands {
         /// The task to execute.
         task: String,
         /// Policy level (permissive, moderate, strict).
-        #[arg(short, long, default_value = "permissive")]
-        policy: String,
+        #[arg(short, long, value_enum, default_value_t = PolicyArg::Permissive)]
+        policy: PolicyArg,
         /// Auto-continue without user prompts.
         #[arg(long)]
         auto_continue: bool,
@@ -40,14 +57,6 @@ fn init_tracing() {
         .init();
 }
 
-fn parse_policy(s: &str) -> PolicyLevel {
-    match s.to_lowercase().as_str() {
-        "strict" => PolicyLevel::Strict,
-        "moderate" => PolicyLevel::Moderate,
-        _ => PolicyLevel::Permissive,
-    }
-}
-
 #[tokio::main]
 async fn main() {
     init_tracing();
@@ -60,7 +69,7 @@ async fn main() {
             auto_continue,
         } => {
             let config = SupervisorConfig {
-                policy: parse_policy(&policy),
+                policy: policy.into(),
                 auto_continue,
                 ..Default::default()
             };

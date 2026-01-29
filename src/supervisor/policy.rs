@@ -1,5 +1,7 @@
 //! Policy engine for evaluating tool calls.
 
+use std::collections::HashSet;
+
 use serde::{Deserialize, Serialize};
 
 /// Policy strictness level.
@@ -13,7 +15,7 @@ pub enum PolicyLevel {
 }
 
 /// Decision from policy evaluation.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PolicyDecision {
     Allow,
     Deny(String),
@@ -24,8 +26,8 @@ pub enum PolicyDecision {
 #[derive(Debug, Clone)]
 pub struct PolicyEngine {
     level: PolicyLevel,
-    allowed_tools: Vec<String>,
-    denied_tools: Vec<String>,
+    allowed_tools: HashSet<String>,
+    denied_tools: HashSet<String>,
 }
 
 impl PolicyEngine {
@@ -33,18 +35,18 @@ impl PolicyEngine {
     pub fn new(level: PolicyLevel) -> Self {
         Self {
             level,
-            allowed_tools: Vec::new(),
-            denied_tools: Vec::new(),
+            allowed_tools: HashSet::new(),
+            denied_tools: HashSet::new(),
         }
     }
 
     /// Evaluate a tool call against the policy.
     #[must_use]
     pub fn evaluate(&self, tool_name: &str, _tool_input: &serde_json::Value) -> PolicyDecision {
-        if self.denied_tools.iter().any(|t| t == tool_name) {
+        if self.denied_tools.contains(tool_name) {
             return PolicyDecision::Deny(format!("Tool '{tool_name}' is explicitly denied"));
         }
-        if self.allowed_tools.iter().any(|t| t == tool_name) {
+        if self.allowed_tools.contains(tool_name) {
             return PolicyDecision::Allow;
         }
         match self.level {
@@ -60,11 +62,11 @@ impl PolicyEngine {
 
     /// Add a tool to the allowed list.
     pub fn allow_tool(&mut self, tool: impl Into<String>) {
-        self.allowed_tools.push(tool.into());
+        self.allowed_tools.insert(tool.into());
     }
 
     /// Add a tool to the denied list.
     pub fn deny_tool(&mut self, tool: impl Into<String>) {
-        self.denied_tools.push(tool.into());
+        self.denied_tools.insert(tool.into());
     }
 }

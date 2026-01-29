@@ -1,0 +1,15 @@
+#!/bin/bash
+set -e
+
+# Source cargo environment
+source "$HOME/.cargo/env" 2>/dev/null || true
+
+# Format Rust code
+echo "Formatting Rust code..."
+cargo fmt --all -- --check
+
+# Run clippy
+echo "Running clippy..."
+cargo clippy --all-targets --all-features -- -D warnings
+
+echo "Pre-commit checks passed!"

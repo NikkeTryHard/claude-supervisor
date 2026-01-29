@@ -4,31 +4,29 @@ Automated Claude Code with AI oversight — a Rust-based supervisor that monitor
 
 ## Architecture Overview
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    RUST SUPERVISOR                          │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐  │
-│  │ Policy Engine│◄───│  AI Client   │◄───│    clust     │  │
-│  │ (rules-based)│    │ (supervisor) │    │ (Claude API) │  │
-│  └──────┬───────┘    └──────────────┘    └──────────────┘  │
-│         │ approve/deny/guide                                │
-│         ▼                                                   │
-│  ┌──────────────────────────────────────┐                  │
-│  │      Event Router (mpsc channel)     │                  │
-│  └──────────────────────────────────────┘                  │
-│         ▲                        ▲                         │
-└─────────┼────────────────────────┼─────────────────────────┘
-          │                        │
-    ┌─────┴─────┐           ┌──────┴──────┐
-    │ CLI Stream│           │ Hook Handler│
-    │ (stdout)  │           │ (PreToolUse)│
-    └─────┬─────┘           └──────┬──────┘
-          │                        │
-    ┌─────┴─────────────────┐      │
-    │ claude -p "<task>"    │◄─────┘
-    │ --output-format       │  (blocks/allows)
-    │ stream-json           │
-    └───────────────────────┘
+```mermaid
+flowchart TB
+    subgraph supervisor["Rust Supervisor"]
+        clust["clust<br/>(Claude API)"]
+        ai["AI Client<br/>(supervisor)"]
+        policy["Policy Engine<br/>(rules-based)"]
+        router["Event Router<br/>(mpsc channel)"]
+
+        clust --> ai --> policy
+        policy -->|approve/deny/guide| router
+    end
+
+    subgraph inputs["Event Sources"]
+        stream["CLI Stream<br/>(stdout)"]
+        hooks["Hook Handler<br/>(PreToolUse)"]
+    end
+
+    claude["claude -p 'task'<br/>--output-format stream-json"]
+
+    stream --> router
+    hooks --> router
+    claude --> stream
+    hooks -.->|blocks/allows| claude
 ```
 
 ## Key Findings from Research

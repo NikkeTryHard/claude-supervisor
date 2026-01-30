@@ -1,6 +1,7 @@
 //! Claude Supervisor - Automated Claude Code with AI oversight.
 
 pub mod ai;
+pub mod audit;
 pub mod cli;
 pub mod commands;
 pub mod config;

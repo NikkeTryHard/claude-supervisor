@@ -292,6 +292,150 @@ impl HookHandler {
             }
         }
     }
+
+    /// Attempt to escalate a Stop event to the supervisor via IPC.
+    ///
+    /// The `transcript_path` parameter allows the supervisor to read the full
+    /// conversation context and final message directly from the transcript file.
+    pub async fn try_escalate_stop(
+        &self,
+        session_id: &str,
+        final_message: &str,
+        transcript_path: Option<&str>,
+        task: Option<&str>,
+        iteration: u32,
+    ) -> Option<crate::ipc::StopEscalationResponse> {
+        let client = self.ipc_client.as_ref()?;
+
+        if !client.is_supervisor_running() {
+            tracing::debug!("Supervisor not running, skipping stop escalation");
+            return None;
+        }
+
+        let request = crate::ipc::StopEscalationRequest {
+            session_id: session_id.to_string(),
+            final_message: final_message.to_string(),
+            transcript_path: transcript_path.map(String::from),
+            task: task.map(String::from),
+            iteration,
+        };
+
+        tracing::debug!(
+            session_id = %session_id,
+            iteration = iteration,
+            "Escalating stop to supervisor"
+        );
+
+        match client.escalate_stop(&request).await {
+            Ok(response) => {
+                tracing::info!(
+                    session_id = %session_id,
+                    response = ?response,
+                    "Received supervisor stop response"
+                );
+                Some(response)
+            }
+            Err(e) => {
+                tracing::warn!(
+                    session_id = %session_id,
+                    error = %e,
+                    "Failed to escalate stop to supervisor"
+                );
+                None
+            }
+        }
+    }
+
+    /// Handle a Stop event asynchronously with optional escalation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the response cannot be serialized.
+    pub async fn handle_stop_async(
+        &self,
+        input: &super::input::HookInput,
+        task: Option<&str>,
+    ) -> Result<HookResult, HookError> {
+        // If stop_hook_active is true, allow to prevent infinite loops
+        if input.stop_hook_active == Some(true) {
+            tracing::debug!("Stop hook already active, allowing to prevent infinite loop");
+            let response = StopResponse::allow();
+            let response_json = serde_json::to_string(&response)?;
+            return Ok(HookResult {
+                response: response_json,
+                should_deny: false,
+            });
+        }
+
+        // Increment iteration count
+        let iteration = self.iterations.increment(&input.session_id);
+        tracing::debug!(session = %input.session_id, iteration = iteration, "Stop event iteration");
+
+        // If we've exceeded max iterations, allow stop
+        if iteration > self.stop_config.max_iterations {
+            tracing::info!(
+                session = %input.session_id,
+                iteration = iteration,
+                max = self.stop_config.max_iterations,
+                "Max iterations exceeded, allowing stop"
+            );
+            let response = StopResponse::allow();
+            let response_json = serde_json::to_string(&response)?;
+            return Ok(HookResult {
+                response: response_json,
+                should_deny: false,
+            });
+        }
+
+        // Try escalation to supervisor if available
+        if self.ipc_client.is_some() {
+            // Pass empty final_message - supervisor reads the transcript for actual content
+            let final_message = "";
+            if let Some(escalation_response) = self
+                .try_escalate_stop(
+                    &input.session_id,
+                    final_message,
+                    input.transcript_path.as_deref(),
+                    task,
+                    iteration,
+                )
+                .await
+            {
+                let response = match escalation_response {
+                    crate::ipc::StopEscalationResponse::Allow => StopResponse::allow(),
+                    crate::ipc::StopEscalationResponse::Continue { reason } => {
+                        StopResponse::block(reason)
+                    }
+                };
+                let response_json = serde_json::to_string(&response)?;
+                return Ok(HookResult {
+                    response: response_json,
+                    should_deny: false,
+                });
+            }
+        }
+
+        // Fallback: If force_continue is enabled, block the stop
+        if self.stop_config.force_continue {
+            tracing::info!(session = %input.session_id, "Force continue enabled, blocking stop");
+            let response = StopResponse::block("Continue working on the task.");
+            let response_json = serde_json::to_string(&response)?;
+            return Ok(HookResult {
+                response: response_json,
+                should_deny: false,
+            });
+        }
+
+        // Default: allow stop
+        tracing::debug!(session = %input.session_id, "Stop event allowed");
+        let response = StopResponse::allow();
+        let response_json = serde_json::to_string(&response)?;
+
+        Ok(HookResult {
+            response: response_json,
+            should_deny: false,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -530,5 +674,55 @@ mod tests {
             .await;
 
         assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_try_escalate_stop_no_client() {
+        let handler = create_handler(PolicyLevel::Permissive);
+        let result = handler
+            .try_escalate_stop(
+                "session-1",
+                "Task done",
+                Some("/path/to/transcript.jsonl"),
+                Some("Fix bug"),
+                1,
+            )
+            .await;
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_try_escalate_stop_supervisor_not_running() {
+        let client = IpcClient::with_path("/nonexistent/socket.sock");
+        let handler = create_handler(PolicyLevel::Permissive).with_ipc_client(client);
+        let result = handler
+            .try_escalate_stop(
+                "session-1",
+                "Task done",
+                Some("/path/to/transcript.jsonl"),
+                Some("Fix bug"),
+                1,
+            )
+            .await;
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_handle_stop_async_no_client_fallback() {
+        let handler = create_handler(PolicyLevel::Permissive);
+        let input = HookInput {
+            hook_event_name: "Stop".to_string(),
+            session_id: "test".to_string(),
+            cwd: None,
+            transcript_path: None,
+            permission_mode: None,
+            tool_name: None,
+            tool_use_id: None,
+            tool_input: None,
+            tool_result: None,
+            stop_hook_active: Some(false),
+        };
+        let result = handler.handle_stop_async(&input, None).await.unwrap();
+        assert!(result.response.contains("\"decision\":\"allow\""));
     }
 }

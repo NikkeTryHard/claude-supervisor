@@ -42,6 +42,37 @@ pub enum EscalationResponse {
     },
 }
 
+/// Request from Stop hook to supervisor for Q&A escalation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StopEscalationRequest {
+    /// Session ID from Claude Code.
+    pub session_id: String,
+    /// The final message/summary from Claude before stopping.
+    /// Note: This may be empty - the supervisor should read the transcript
+    /// for the actual final message when `transcript_path` is provided.
+    pub final_message: String,
+    /// Path to the conversation transcript file.
+    /// The supervisor uses this to read the full context and final message.
+    pub transcript_path: Option<String>,
+    /// The original task being worked on.
+    pub task: Option<String>,
+    /// Current iteration count for this session.
+    pub iteration: u32,
+}
+
+/// Response from supervisor to Stop hook.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "decision", rename_all = "snake_case")]
+pub enum StopEscalationResponse {
+    /// Allow Claude to stop - task is complete.
+    Allow,
+    /// Block stop and provide continuation instructions.
+    Continue {
+        /// Reason/instructions for Claude to continue.
+        reason: String,
+    },
+}
+
 /// Errors that can occur during IPC.
 #[derive(Debug, thiserror::Error)]
 pub enum IpcError {
@@ -143,5 +174,40 @@ mod tests {
 
         let err = IpcError::Timeout(4000);
         assert_eq!(err.to_string(), "IPC timeout after 4000ms");
+    }
+
+    #[test]
+    fn stop_escalation_request_serialization_roundtrip() {
+        let request = StopEscalationRequest {
+            session_id: "session-123".to_string(),
+            final_message: "I've completed the task".to_string(),
+            transcript_path: Some("/home/user/.claude/projects/abc/conversation.jsonl".to_string()),
+            task: Some("Fix the auth bug".to_string()),
+            iteration: 3,
+        };
+        let serialized = serde_json::to_string(&request).unwrap();
+        let deserialized: StopEscalationRequest = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(request, deserialized);
+    }
+
+    #[test]
+    fn stop_escalation_response_allow_serialization() {
+        let response = StopEscalationResponse::Allow;
+        let serialized = serde_json::to_string(&response).unwrap();
+        assert_eq!(serialized, r#"{"decision":"allow"}"#);
+        let deserialized: StopEscalationResponse = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(response, deserialized);
+    }
+
+    #[test]
+    fn stop_escalation_response_continue_serialization() {
+        let response = StopEscalationResponse::Continue {
+            reason: "Task incomplete, need to run tests".to_string(),
+        };
+        let serialized = serde_json::to_string(&response).unwrap();
+        assert!(serialized.contains(r#""decision":"continue""#));
+        assert!(serialized.contains(r#""reason":"Task incomplete"#));
+        let deserialized: StopEscalationResponse = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(response, deserialized);
     }
 }

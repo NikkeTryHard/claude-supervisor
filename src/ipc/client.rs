@@ -124,6 +124,64 @@ impl IpcClient {
             Err(_) => Err(IpcError::Timeout(timeout_ms)),
         }
     }
+
+    /// Sends a Stop escalation request to the supervisor and waits for a response.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The supervisor is not running ([`IpcError::SupervisorNotRunning`])
+    /// - The connection fails ([`IpcError::ConnectionFailed`])
+    /// - The operation times out ([`IpcError::Timeout`])
+    /// - Message serialization fails ([`IpcError::SerializationError`])
+    /// - The response is invalid ([`IpcError::InvalidResponse`])
+    pub async fn escalate_stop(
+        &self,
+        request: &crate::ipc::StopEscalationRequest,
+    ) -> Result<crate::ipc::StopEscalationResponse, IpcError> {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        use tokio::net::UnixStream;
+
+        if !self.is_supervisor_running() {
+            return Err(IpcError::SupervisorNotRunning);
+        }
+
+        #[allow(clippy::cast_possible_truncation)]
+        let timeout_ms = self.timeout.as_millis() as u64;
+
+        let result = tokio::time::timeout(self.timeout, async {
+            let stream = UnixStream::connect(&self.socket_path).await?;
+            let (reader, mut writer) = stream.into_split();
+
+            // Wrap request with type tag for server routing
+            let wrapper = serde_json::json!({
+                "type": "stop",
+                "payload": request
+            });
+            let mut request_json = serde_json::to_string(&wrapper)?;
+            request_json.push('\n');
+            writer.write_all(request_json.as_bytes()).await?;
+            writer.flush().await?;
+
+            let mut reader = BufReader::new(reader);
+            let mut response_line = String::new();
+            let bytes_read = reader.read_line(&mut response_line).await?;
+
+            if bytes_read == 0 {
+                return Err(IpcError::InvalidResponse);
+            }
+
+            let response: crate::ipc::StopEscalationResponse =
+                serde_json::from_str(response_line.trim())?;
+            Ok(response)
+        })
+        .await;
+
+        match result {
+            Ok(inner) => inner,
+            Err(_) => Err(IpcError::Timeout(timeout_ms)),
+        }
+    }
 }
 
 impl Default for IpcClient {
@@ -170,5 +228,19 @@ mod tests {
     fn client_default_impl() {
         let client = IpcClient::default();
         assert_eq!(client.socket_path(), Path::new(DEFAULT_SOCKET_PATH));
+    }
+
+    #[tokio::test]
+    async fn client_escalate_stop_returns_error_when_supervisor_not_running() {
+        let client = IpcClient::with_path("/nonexistent/socket.sock");
+        let request = crate::ipc::StopEscalationRequest {
+            session_id: "test".to_string(),
+            final_message: "Done".to_string(),
+            transcript_path: Some("/path/to/transcript.jsonl".to_string()),
+            task: Some("Test task".to_string()),
+            iteration: 1,
+        };
+        let result = client.escalate_stop(&request).await;
+        assert!(matches!(result, Err(IpcError::SupervisorNotRunning)));
     }
 }

@@ -50,7 +50,9 @@ pub mod types;
 
 pub use client::IpcClient;
 pub use server::{IpcServer, ServerHandle};
-pub use types::{EscalationRequest, EscalationResponse, IpcError};
+pub use types::{
+    EscalationRequest, EscalationResponse, IpcError, StopEscalationRequest, StopEscalationResponse,
+};
 
 /// Default socket path for supervisor IPC.
 pub const DEFAULT_SOCKET_PATH: &str = "/tmp/claude-supervisor.sock";

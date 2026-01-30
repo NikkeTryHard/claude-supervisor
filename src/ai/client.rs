@@ -2,7 +2,6 @@
 
 use std::time::Duration;
 
-use async_trait::async_trait;
 use reqwest::Client;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -70,13 +69,6 @@ pub enum AiError {
     Timeout,
 }
 
-/// Trait for AI providers.
-#[async_trait]
-pub trait AiProvider: Send + Sync {
-    /// Generate a response from the AI provider.
-    async fn generate(&self, system: &str, user: &str) -> Result<String, AiError>;
-}
-
 /// Gemini API provider.
 #[derive(Debug, Clone)]
 pub struct GeminiProvider {
@@ -101,9 +93,15 @@ impl GeminiProvider {
     }
 }
 
-#[async_trait]
-impl AiProvider for GeminiProvider {
-    async fn generate(&self, system: &str, user: &str) -> Result<String, AiError> {
+impl GeminiProvider {
+    /// Generate a response from the Gemini API.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AiError::Timeout` if the request times out.
+    /// Returns `AiError::RequestFailed` if the API request fails.
+    /// Returns `AiError::ParseError` if the response cannot be parsed.
+    pub async fn generate(&self, system: &str, user: &str) -> Result<String, AiError> {
         let url = format!(
             "{}/models/{}:generateContent",
             self.base_url.trim_end_matches('/'),
@@ -193,9 +191,15 @@ impl ClaudeProvider {
     }
 }
 
-#[async_trait]
-impl AiProvider for ClaudeProvider {
-    async fn generate(&self, system: &str, user: &str) -> Result<String, AiError> {
+impl ClaudeProvider {
+    /// Generate a response from the Claude API.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AiError::Timeout` if the request times out.
+    /// Returns `AiError::RequestFailed` if the API request fails.
+    /// Returns `AiError::ParseError` if the response cannot be parsed.
+    pub async fn generate(&self, system: &str, user: &str) -> Result<String, AiError> {
         let url = format!("{}/v1/messages", self.base_url.trim_end_matches('/'));
 
         let body = serde_json::json!({
@@ -262,9 +266,15 @@ pub enum Provider {
     Claude(ClaudeProvider),
 }
 
-#[async_trait]
-impl AiProvider for Provider {
-    async fn generate(&self, system: &str, user: &str) -> Result<String, AiError> {
+impl Provider {
+    /// Generate a response from the configured AI provider.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AiError::Timeout` if the request times out.
+    /// Returns `AiError::RequestFailed` if the API request fails.
+    /// Returns `AiError::ParseError` if the response cannot be parsed.
+    pub async fn generate(&self, system: &str, user: &str) -> Result<String, AiError> {
         match self {
             Self::Gemini(p) => p.generate(system, user).await,
             Self::Claude(p) => p.generate(system, user).await,

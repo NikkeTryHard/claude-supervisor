@@ -11,6 +11,16 @@ use comrak::{parse_document, Arena, Options};
 
 use super::source::{KnowledgeFact, KnowledgeSource};
 
+/// Safely truncate a string at a character boundary.
+///
+/// Unlike byte slicing, this will not panic on multi-byte UTF-8 characters.
+fn safe_truncate(s: &str, max_chars: usize) -> &str {
+    match s.char_indices().nth(max_chars) {
+        Some((idx, _)) => &s[..idx],
+        None => s,
+    }
+}
+
 /// Knowledge source backed by CLAUDE.md file(s).
 pub struct ClaudeMdSource {
     /// Parsed sections: header -> content
@@ -27,17 +37,57 @@ impl ClaudeMdSource {
     pub async fn load(project_dir: &Path) -> Self {
         let claude_md_path = project_dir.join("CLAUDE.md");
 
-        if claude_md_path.exists() {
-            match tokio::fs::read_to_string(&claude_md_path).await {
-                Ok(content) => Self::from_content(&content),
-                Err(e) => {
+        // Try to read directly - handles non-existence via error
+        match tokio::fs::read_to_string(&claude_md_path).await {
+            Ok(content) => Self::from_content(&content),
+            Err(e) => {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    tracing::debug!("No CLAUDE.md found in {:?}", project_dir);
+                } else {
                     tracing::warn!("Failed to read CLAUDE.md: {}", e);
-                    Self::empty()
                 }
+                Self::empty()
             }
-        } else {
-            tracing::debug!("No CLAUDE.md found in {:?}", project_dir);
+        }
+    }
+
+    /// Load CLAUDE.md from both project directory and global ~/.claude/CLAUDE.md.
+    ///
+    /// Merges both sources, with project-level sections taking precedence
+    /// over global sections with the same name.
+    pub async fn load_with_global(project_dir: &Path) -> Self {
+        let mut combined_sections = HashMap::new();
+        let mut combined_content = String::new();
+
+        // Load global CLAUDE.md first (lower priority)
+        if let Some(home) = dirs::home_dir() {
+            let global_path = home.join(".claude").join("CLAUDE.md");
+            if let Ok(content) = tokio::fs::read_to_string(&global_path).await {
+                let global = Self::from_content(&content);
+                combined_sections.extend(global.sections);
+                combined_content.push_str(&content);
+                combined_content.push_str("\n\n---\n\n");
+                tracing::debug!("Loaded global CLAUDE.md from {:?}", global_path);
+            }
+        }
+
+        // Load project CLAUDE.md (higher priority, overwrites global sections)
+        let project_path = project_dir.join("CLAUDE.md");
+        if let Ok(content) = tokio::fs::read_to_string(&project_path).await {
+            let project = Self::from_content(&content);
+            combined_sections.extend(project.sections);
+            combined_content.push_str(&content);
+            tracing::debug!("Loaded project CLAUDE.md from {:?}", project_path);
+        }
+
+        if combined_sections.is_empty() {
+            tracing::debug!("No CLAUDE.md files found");
             Self::empty()
+        } else {
+            Self {
+                sections: combined_sections,
+                raw_content: combined_content,
+            }
         }
     }
 
@@ -226,9 +276,9 @@ impl KnowledgeSource for ClaudeMdSource {
             .sections
             .iter()
             .map(|(header, content)| {
-                // Truncate long sections
-                let truncated = if content.len() > 500 {
-                    format!("{}...", &content[..500])
+                // Truncate long sections (using safe char-boundary truncation)
+                let truncated = if content.chars().count() > 500 {
+                    format!("{}...", safe_truncate(content, 500))
                 } else {
                     content.clone()
                 };

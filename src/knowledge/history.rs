@@ -35,40 +35,66 @@ impl SessionHistorySource {
         Self { pairs: Vec::new() }
     }
 
+    /// Maximum number of JSONL files to load.
+    const MAX_FILES: usize = 10;
+    /// Maximum number of entries per file.
+    const MAX_ENTRIES_PER_FILE: usize = 1000;
+
     /// Load from JSONL files in a project directory.
     pub async fn load(project_dir: &std::path::Path) -> Self {
         // Find the Claude projects directory for this path
-        let home = dirs::home_dir().unwrap_or_default();
+        let Some(home) = dirs::home_dir() else {
+            tracing::debug!("Could not determine home directory");
+            return Self::empty();
+        };
         let claude_projects = home.join(".claude").join("projects");
 
-        if !claude_projects.exists() {
+        // Use async check for directory existence
+        if !tokio::fs::try_exists(&claude_projects)
+            .await
+            .unwrap_or(false)
+        {
             tracing::debug!("No Claude projects directory found");
             return Self::empty();
         }
 
         // Hash the project path to find the right directory
-        let project_hash = project_dir
-            .to_string_lossy()
-            .replace('/', "-")
-            .trim_start_matches('-')
-            .to_string();
+        // Claude Code format: /home/user/path -> -home-user-path (keeps leading dash)
+        let project_hash = project_dir.to_string_lossy().replace('/', "-");
 
         let project_sessions = claude_projects.join(&project_hash);
 
-        if !project_sessions.exists() {
+        if !tokio::fs::try_exists(&project_sessions)
+            .await
+            .unwrap_or(false)
+        {
             tracing::debug!("No session history for project: {:?}", project_dir);
             return Self::empty();
         }
 
-        // Load all JSONL files
+        // Load JSONL files with limits to prevent memory exhaustion
         let mut all_entries = Vec::new();
+        let mut files_loaded = 0;
 
         if let Ok(mut entries) = tokio::fs::read_dir(&project_sessions).await {
             while let Ok(Some(entry)) = entries.next_entry().await {
+                if files_loaded >= Self::MAX_FILES {
+                    tracing::debug!("Reached max file limit ({})", Self::MAX_FILES);
+                    break;
+                }
+
                 let path = entry.path();
                 if path.extension().is_some_and(|e| e == "jsonl") {
                     match crate::watcher::parse_jsonl_file(&path).await {
-                        Ok(entries) => all_entries.extend(entries),
+                        Ok(entries) => {
+                            // Limit entries per file
+                            let limited: Vec<_> = entries
+                                .into_iter()
+                                .take(Self::MAX_ENTRIES_PER_FILE)
+                                .collect();
+                            all_entries.extend(limited);
+                            files_loaded += 1;
+                        }
                         Err(e) => tracing::warn!("Failed to parse {:?}: {}", path, e),
                     }
                 }

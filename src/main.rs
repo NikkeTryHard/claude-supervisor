@@ -9,7 +9,7 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 use claude_supervisor::commands::HookInstaller;
 use claude_supervisor::config::{ConfigLoader, PolicyConfig, SupervisorConfig, WorktreeConfig};
 use claude_supervisor::hooks::HookHandler;
-use claude_supervisor::supervisor::{PolicyEngine, PolicyLevel};
+use claude_supervisor::supervisor::{MultiSessionSupervisor, PolicyEngine, PolicyLevel};
 use claude_supervisor::worktree::{WorktreeManager, WorktreeRegistry};
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -90,6 +90,21 @@ enum Commands {
     Worktree {
         #[command(subcommand)]
         action: WorktreeAction,
+    },
+    /// Run multiple Claude Code sessions in parallel.
+    Multi {
+        /// Tasks to run (can specify multiple).
+        #[arg(long, action = clap::ArgAction::Append, required = true)]
+        task: Vec<String>,
+        /// Maximum parallel sessions.
+        #[arg(long, default_value = "3")]
+        max_parallel: usize,
+        /// Policy level for all sessions.
+        #[arg(short, long, value_enum, default_value_t = PolicyArg::Permissive)]
+        policy: PolicyArg,
+        /// Auto-continue without user prompts.
+        #[arg(long)]
+        auto_continue: bool,
     },
 }
 
@@ -462,6 +477,58 @@ async fn handle_worktree(action: WorktreeAction) {
     }
 }
 
+async fn handle_multi(
+    tasks: Vec<String>,
+    max_parallel: usize,
+    policy: PolicyArg,
+    _auto_continue: bool,
+) {
+    tracing::info!(
+        tasks = tasks.len(),
+        max_parallel = max_parallel,
+        policy = ?policy,
+        "Starting multi-session supervisor"
+    );
+
+    let policy_engine = PolicyEngine::new(policy.into());
+    let mut supervisor = MultiSessionSupervisor::new(max_parallel, policy_engine);
+
+    // Spawn all sessions
+    for task in &tasks {
+        match supervisor.spawn_session(task.clone()).await {
+            Ok(id) => {
+                tracing::info!(session_id = %id, task = %task, "Session spawned");
+            }
+            Err(e) => {
+                tracing::error!(task = %task, error = %e, "Failed to spawn session");
+            }
+        }
+    }
+
+    // Wait for all to complete
+    let results = supervisor.wait_all().await;
+
+    // Print summary
+    println!("\n=== Multi-Session Summary ===");
+    println!("Sessions: {}", results.len());
+
+    for result in &results {
+        let status = match &result.result {
+            Ok(r) => format!("{r:?}"),
+            Err(e) => format!("Error: {e}"),
+        };
+        println!("  [{}] {} - {}", result.id, result.task, status);
+    }
+
+    let stats = supervisor.stats();
+    println!("\n=== Aggregated Stats ===");
+    println!("  Completed: {}", stats.sessions_completed);
+    println!("  Failed: {}", stats.sessions_failed);
+    println!("  Tool calls: {}", stats.total_tool_calls);
+    println!("  Approvals: {}", stats.total_approvals);
+    println!("  Denials: {}", stats.total_denials);
+}
+
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
@@ -543,6 +610,14 @@ async fn main() {
         }
         Commands::Worktree { action } => {
             handle_worktree(action).await;
+        }
+        Commands::Multi {
+            task,
+            max_parallel,
+            policy,
+            auto_continue,
+        } => {
+            handle_multi(task, max_parallel, policy, auto_continue).await;
         }
     }
 }

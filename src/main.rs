@@ -6,10 +6,14 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand, ValueEnum};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
+use claude_supervisor::ai::AiClient;
+use claude_supervisor::cli::{ClaudeProcess, ClaudeProcessBuilder};
 use claude_supervisor::commands::HookInstaller;
 use claude_supervisor::config::{ConfigLoader, PolicyConfig, SupervisorConfig, WorktreeConfig};
 use claude_supervisor::hooks::HookHandler;
-use claude_supervisor::supervisor::{MultiSessionSupervisor, PolicyEngine, PolicyLevel};
+use claude_supervisor::supervisor::{
+    MultiSessionSupervisor, PolicyEngine, PolicyLevel, Supervisor, SupervisorResult,
+};
 use claude_supervisor::worktree::{WorktreeManager, WorktreeRegistry};
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -527,6 +531,85 @@ async fn handle_multi(
     println!("  Tool calls: {}", stats.total_tool_calls);
     println!("  Approvals: {}", stats.total_approvals);
     println!("  Denials: {}", stats.total_denials);
+}
+
+/// Handle the run command - spawn and supervise Claude Code.
+#[allow(dead_code)] // Will be wired in Batch 2
+async fn handle_run(
+    task: Option<String>,
+    resume: Option<String>,
+    config: SupervisorConfig,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Get prompt (task or "continue" for resume)
+    let prompt = task.unwrap_or_else(|| "continue".to_string());
+
+    // Build process
+    let mut builder = ClaudeProcessBuilder::new(&prompt);
+
+    // Add resume if provided
+    if let Some(ref session_id) = resume {
+        builder = builder.resume(session_id);
+    }
+
+    // Add allowed tools if configured
+    if !config.allowed_tools.is_empty() {
+        let tools: Vec<&str> = config.allowed_tools.iter().map(String::as_str).collect();
+        builder = builder.allowed_tools(&tools);
+    }
+
+    tracing::info!("Spawning Claude Code process");
+    let process = ClaudeProcess::spawn(&builder)?;
+
+    // Build policy engine
+    let mut policy = PolicyEngine::new(config.policy);
+    for tool in &config.allowed_tools {
+        policy.allow_tool(tool);
+    }
+
+    // Create supervisor (with or without AI)
+    let mut supervisor = if config.ai_supervisor {
+        tracing::info!("AI supervision enabled");
+        let ai_client = AiClient::from_env()?;
+        Supervisor::from_process_with_ai(process, policy, ai_client)?
+    } else {
+        Supervisor::from_process(process, policy)?
+    };
+
+    // Set task context
+    supervisor.set_task(&prompt);
+
+    // Initialize knowledge from current directory
+    let cwd = std::env::current_dir()?;
+    supervisor.init_knowledge(&cwd).await;
+
+    // Run supervision loop
+    tracing::info!("Starting supervision loop");
+    let result = supervisor.run().await?;
+
+    // Report result
+    match result {
+        SupervisorResult::Completed {
+            session_id,
+            cost_usd,
+        } => {
+            tracing::info!(
+                session_id = ?session_id,
+                cost_usd = ?cost_usd,
+                "Session completed successfully"
+            );
+        }
+        SupervisorResult::Killed { reason } => {
+            tracing::warn!(reason = %reason, "Session killed by supervisor");
+        }
+        SupervisorResult::ProcessExited => {
+            tracing::info!("Claude process exited");
+        }
+        SupervisorResult::Cancelled => {
+            tracing::info!("Session cancelled");
+        }
+    }
+
+    Ok(())
 }
 
 #[tokio::main]

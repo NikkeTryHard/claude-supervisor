@@ -4,6 +4,7 @@
 //! Claude Code processes, along with control methods for managing the
 //! running process.
 
+use std::path::PathBuf;
 use std::process::{ExitStatus, Stdio};
 use std::time::Duration;
 
@@ -43,6 +44,7 @@ pub struct ClaudeProcessBuilder {
     max_turns: Option<u32>,
     append_system_prompt: Option<String>,
     system_prompt: Option<String>,
+    working_dir: Option<PathBuf>,
 }
 
 impl ClaudeProcessBuilder {
@@ -88,6 +90,19 @@ impl ClaudeProcessBuilder {
     pub fn system_prompt(mut self, prompt: impl Into<String>) -> Self {
         self.system_prompt = Some(prompt.into());
         self
+    }
+
+    /// Set the working directory for the Claude process.
+    #[must_use]
+    pub fn working_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.working_dir = Some(dir.into());
+        self
+    }
+
+    /// Get the working directory, if set.
+    #[must_use]
+    pub fn get_working_dir(&self) -> Option<&PathBuf> {
+        self.working_dir.as_ref()
     }
 
     /// Get the prompt.
@@ -162,12 +177,17 @@ impl ClaudeProcess {
     ) -> Result<Self, SpawnError> {
         let args = builder.build_args();
 
-        let child = Command::new(binary)
-            .args(&args)
+        let mut cmd = Command::new(binary);
+        cmd.args(&args)
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(SpawnError::from_io)?;
+            .stderr(Stdio::piped());
+
+        // Apply working directory if set
+        if let Some(ref dir) = builder.working_dir {
+            cmd.current_dir(dir);
+        }
+
+        let child = cmd.spawn().map_err(SpawnError::from_io)?;
 
         Ok(Self { child })
     }

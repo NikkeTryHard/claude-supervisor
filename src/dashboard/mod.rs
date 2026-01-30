@@ -3,6 +3,7 @@
 mod api;
 mod error;
 mod handlers;
+mod server;
 mod state;
 
 pub use api::{
@@ -12,6 +13,7 @@ pub use error::DashboardError;
 pub use handlers::{
     get_events_sse, get_metrics, get_status, post_continue, post_kill, post_stop, AppState,
 };
+pub use server::{DashboardConfig, DashboardServer, DEFAULT_PORT};
 pub use state::{
     create_dashboard_channels, DashboardCommand, DashboardEvent, DashboardHandles, DashboardState,
     SupervisorStatus,

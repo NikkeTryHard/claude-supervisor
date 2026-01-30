@@ -2,11 +2,12 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
 use crate::supervisor::{PolicyEngine, SessionStats, SupervisorError, SupervisorResult};
 
@@ -186,5 +187,119 @@ impl MultiSessionSupervisor {
     #[must_use]
     pub fn has_pending(&self) -> bool {
         !self.join_set.is_empty()
+    }
+
+    /// Spawn a new session with the given task.
+    ///
+    /// This method waits for a semaphore permit if at capacity.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if session spawning fails.
+    pub async fn spawn_session(&mut self, task: String) -> Result<String, MultiSessionError> {
+        // Acquire semaphore permit (waits if at capacity)
+        let permit = self.semaphore.clone().acquire_owned().await.map_err(|_| {
+            MultiSessionError::MaxSessionsReached {
+                limit: self.max_sessions,
+            }
+        })?;
+
+        Ok(self.spawn_session_internal(&task, permit))
+    }
+
+    /// Try to spawn a new session without waiting.
+    ///
+    /// # Returns
+    ///
+    /// The session ID on success, or error if at capacity.
+    ///
+    /// # Errors
+    ///
+    /// Returns `MaxSessionsReached` if already at capacity.
+    pub fn try_spawn_session(&mut self, task: &str) -> Result<String, MultiSessionError> {
+        // Try to acquire permit without waiting
+        let permit = self.semaphore.clone().try_acquire_owned().map_err(|_| {
+            MultiSessionError::MaxSessionsReached {
+                limit: self.max_sessions,
+            }
+        })?;
+
+        Ok(self.spawn_session_internal(task, permit))
+    }
+
+    /// Internal session spawning logic.
+    fn spawn_session_internal(
+        &mut self,
+        task: &str,
+        permit: tokio::sync::OwnedSemaphorePermit,
+    ) -> String {
+        let id = Uuid::new_v4().to_string();
+        let meta = SessionMeta::new(id.clone(), task.to_string());
+        let cancel = meta.cancellation_token();
+
+        // Store metadata
+        self.sessions.insert(id.clone(), meta);
+
+        // Spawn the session task
+        let session_id = id.clone();
+        let session_task = task.to_string();
+
+        self.join_set.spawn(async move {
+            // Hold permit for duration of session
+            let _permit = permit;
+
+            let stats = SessionStats {
+                tool_calls: 0,
+                approvals: 0,
+                denials: 0,
+            };
+
+            // Wait for cancellation or simulate completion
+            tokio::select! {
+                () = cancel.cancelled() => {
+                    SessionResult {
+                        id: session_id,
+                        task: session_task,
+                        result: Ok(SupervisorResult::Cancelled),
+                        stats,
+                    }
+                }
+                () = tokio::time::sleep(Duration::from_millis(100)) => {
+                    SessionResult {
+                        id: session_id,
+                        task: session_task,
+                        result: Ok(SupervisorResult::ProcessExited),
+                        stats,
+                    }
+                }
+            }
+        });
+
+        tracing::info!(session_id = %id, task = %task, "Session spawned");
+        id
+    }
+
+    /// Stop a running session by ID.
+    ///
+    /// # Errors
+    ///
+    /// Returns `SessionNotFound` if no session with the given ID exists.
+    pub fn stop_session(&self, id: &str) -> Result<(), MultiSessionError> {
+        let meta = self
+            .sessions
+            .get(id)
+            .ok_or_else(|| MultiSessionError::SessionNotFound { id: id.to_string() })?;
+
+        meta.cancel();
+        tracing::info!(session_id = %id, "Session stop requested");
+        Ok(())
+    }
+
+    /// Stop all running sessions.
+    pub fn stop_all(&self) {
+        for (id, meta) in &self.sessions {
+            meta.cancel();
+            tracing::info!(session_id = %id, "Session stop requested");
+        }
     }
 }

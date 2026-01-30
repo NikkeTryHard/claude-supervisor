@@ -46,3 +46,90 @@ fn test_session_meta_cancellation() {
     meta.cancel();
     assert!(meta.is_cancelled());
 }
+
+#[tokio::test]
+async fn test_spawn_session_returns_id() {
+    let policy = PolicyEngine::new(PolicyLevel::Permissive);
+    let mut supervisor = MultiSessionSupervisor::new(3, policy);
+
+    let id = supervisor
+        .spawn_session("Test task".to_string())
+        .await
+        .unwrap();
+
+    assert!(!id.is_empty());
+    assert_eq!(supervisor.active_count(), 1);
+}
+
+#[tokio::test]
+async fn test_spawn_session_respects_limit() {
+    let policy = PolicyEngine::new(PolicyLevel::Permissive);
+    let mut supervisor = MultiSessionSupervisor::new(2, policy);
+
+    // Spawn two sessions (at limit)
+    let _id1 = supervisor
+        .spawn_session("Task 1".to_string())
+        .await
+        .unwrap();
+    let _id2 = supervisor
+        .spawn_session("Task 2".to_string())
+        .await
+        .unwrap();
+
+    // Third should fail with try_spawn (non-blocking)
+    let result = supervisor.try_spawn_session("Task 3");
+    assert!(matches!(
+        result,
+        Err(MultiSessionError::MaxSessionsReached { limit: 2 })
+    ));
+}
+
+#[tokio::test]
+async fn test_stop_session() {
+    let policy = PolicyEngine::new(PolicyLevel::Permissive);
+    let mut supervisor = MultiSessionSupervisor::new(3, policy);
+
+    let id = supervisor
+        .spawn_session("Long task".to_string())
+        .await
+        .unwrap();
+
+    // Stop the session
+    supervisor.stop_session(&id).unwrap();
+
+    // Session should be marked as cancelled
+    let meta = supervisor.get_session(&id).unwrap();
+    assert!(meta.is_cancelled());
+}
+
+#[tokio::test]
+async fn test_stop_nonexistent_session() {
+    let policy = PolicyEngine::new(PolicyLevel::Permissive);
+    let supervisor = MultiSessionSupervisor::new(3, policy);
+
+    let result = supervisor.stop_session("nonexistent");
+    assert!(matches!(
+        result,
+        Err(MultiSessionError::SessionNotFound { .. })
+    ));
+}
+
+#[tokio::test]
+async fn test_stop_all_sessions() {
+    let policy = PolicyEngine::new(PolicyLevel::Permissive);
+    let mut supervisor = MultiSessionSupervisor::new(5, policy);
+
+    let id1 = supervisor
+        .spawn_session("Task 1".to_string())
+        .await
+        .unwrap();
+    let id2 = supervisor
+        .spawn_session("Task 2".to_string())
+        .await
+        .unwrap();
+
+    supervisor.stop_all();
+
+    assert!(supervisor.get_session(&id1).unwrap().is_cancelled());
+    assert!(supervisor.get_session(&id2).unwrap().is_cancelled());
+}

@@ -42,7 +42,7 @@ fn default_model() -> String {
 }
 
 fn default_max_tokens() -> u32 {
-    1024
+    65536
 }
 
 fn default_base_url() -> String {
@@ -110,7 +110,7 @@ mod tests {
         let config = AiConfig::default();
         assert_eq!(config.provider, ProviderKind::Gemini);
         assert_eq!(config.model, "gemini-3-flash");
-        assert_eq!(config.max_tokens, 1024);
+        assert_eq!(config.max_tokens, 65536);
         assert_eq!(config.base_url, "http://127.0.0.1:8045/v1beta");
         assert_eq!(config.api_key_env, "GEMINI_API_KEY");
     }

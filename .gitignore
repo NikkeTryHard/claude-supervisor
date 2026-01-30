@@ -3,3 +3,4 @@
 # Build cache
 .sccache/
 .worktrees/
+investigations/

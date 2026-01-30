@@ -207,8 +207,10 @@ Runs automatically on commit:
 
 ### Testing
 
+**ALWAYS use `cargo nextest run` (or alias `cargo t`) instead of `cargo test`.**
+
 ```bash
-cargo t              # Run all tests
+cargo t              # Run all tests (alias for cargo nextest run)
 cargo t -- --no-capture  # With output
 cargo ta             # All features
 ```

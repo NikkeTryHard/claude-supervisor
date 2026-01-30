@@ -4,10 +4,12 @@
 
 mod error;
 mod jsonl;
+mod reconstructor;
 mod session_watcher;
 mod tailer;
 
 pub use error::WatcherError;
 pub use jsonl::*;
+pub use reconstructor::{SessionReconstructor, ToolCallRecord};
 pub use session_watcher::{SessionWatcher, WatcherEvent};
 pub use tailer::JsonlTailer;

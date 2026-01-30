@@ -2,3 +2,4 @@
 
 # Build cache
 .sccache/
+.worktrees/

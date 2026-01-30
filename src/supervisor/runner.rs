@@ -241,6 +241,13 @@ impl Supervisor {
                 tracing::debug!(tool = %tool_use.name, "Tool call allowed");
                 EventAction::Continue
             }
+            PolicyDecision::AllowWithModification(_) => {
+                // In the runner context, we treat modified input as a simple allow
+                // The actual modification is handled by the hook handler
+                self.state.record_approval();
+                tracing::debug!(tool = %tool_use.name, "Tool call allowed with modification");
+                EventAction::Continue
+            }
             PolicyDecision::Deny(reason) => {
                 self.state.record_denial();
                 tracing::warn!(tool = %tool_use.name, reason = %reason, "Tool call denied");

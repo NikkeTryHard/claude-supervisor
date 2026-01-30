@@ -1,8 +1,11 @@
 //! Hook handler that processes Claude Code hook events.
 
+use crate::config::StopConfig;
 use crate::supervisor::{PolicyDecision, PolicyEngine};
 
+use super::completion::CompletionDetector;
 use super::input::HookInput;
+use super::iteration::IterationTracker;
 use super::pre_tool_use::PreToolUseResponse;
 use super::stop::StopResponse;
 
@@ -32,13 +35,42 @@ pub struct HookResult {
 #[derive(Debug)]
 pub struct HookHandler {
     policy: PolicyEngine,
+    stop_config: StopConfig,
+    iterations: IterationTracker,
+    completion: CompletionDetector,
 }
 
 impl HookHandler {
     /// Create a new hook handler with the given policy engine.
     #[must_use]
     pub fn new(policy: PolicyEngine) -> Self {
-        Self { policy }
+        Self {
+            policy,
+            stop_config: StopConfig::default(),
+            iterations: IterationTracker::new(),
+            completion: CompletionDetector::default(),
+        }
+    }
+
+    /// Create a new hook handler with custom stop configuration.
+    #[must_use]
+    pub fn with_config(policy: PolicyEngine, stop_config: StopConfig) -> Self {
+        let completion = CompletionDetector::new(
+            stop_config.completion_phrases.clone(),
+            stop_config.incomplete_phrases.clone(),
+        );
+        Self {
+            policy,
+            stop_config,
+            iterations: IterationTracker::new(),
+            completion,
+        }
+    }
+
+    /// Get the stop configuration.
+    #[must_use]
+    pub fn stop_config(&self) -> &StopConfig {
+        &self.stop_config
     }
 
     /// Handle a JSON hook input and return a JSON response.
@@ -83,6 +115,13 @@ impl HookHandler {
                 tracing::info!(tool = %tool_name, decision = "allow", "Tool call approved");
                 (PreToolUseResponse::allow(), false)
             }
+            PolicyDecision::AllowWithModification(updated_input) => {
+                tracing::info!(tool = %tool_name, decision = "allow_modified", "Tool call approved with modified input");
+                (
+                    PreToolUseResponse::allow_with_modification(updated_input),
+                    false,
+                )
+            }
             PolicyDecision::Deny(reason) => {
                 tracing::warn!(tool = %tool_name, reason = %reason, "Tool call denied");
                 (PreToolUseResponse::deny(&reason), true)
@@ -102,14 +141,53 @@ impl HookHandler {
     }
 
     /// Handle a `Stop` event.
-    #[allow(clippy::unused_self)]
-    fn handle_stop(&self, _input: &HookInput) -> Result<HookResult, HookError> {
-        // For now, always allow stop events
-        // Future: Could check if there are pending tasks
+    fn handle_stop(&self, input: &HookInput) -> Result<HookResult, HookError> {
+        // If stop_hook_active is true, allow to prevent infinite loops
+        if input.stop_hook_active == Some(true) {
+            tracing::debug!("Stop hook already active, allowing to prevent infinite loop");
+            let response = StopResponse::allow();
+            let response_json = serde_json::to_string(&response)?;
+            return Ok(HookResult {
+                response: response_json,
+                should_deny: false,
+            });
+        }
+
+        // Increment iteration count
+        let iteration = self.iterations.increment(&input.session_id);
+        tracing::debug!(session = %input.session_id, iteration = iteration, "Stop event iteration");
+
+        // If we've exceeded max iterations, allow stop
+        if iteration > self.stop_config.max_iterations {
+            tracing::info!(
+                session = %input.session_id,
+                iteration = iteration,
+                max = self.stop_config.max_iterations,
+                "Max iterations exceeded, allowing stop"
+            );
+            let response = StopResponse::allow();
+            let response_json = serde_json::to_string(&response)?;
+            return Ok(HookResult {
+                response: response_json,
+                should_deny: false,
+            });
+        }
+
+        // If force_continue is enabled, block the stop
+        if self.stop_config.force_continue {
+            tracing::info!(session = %input.session_id, "Force continue enabled, blocking stop");
+            let response = StopResponse::block("Continue working on the task.");
+            let response_json = serde_json::to_string(&response)?;
+            return Ok(HookResult {
+                response: response_json,
+                should_deny: false,
+            });
+        }
+
+        // Default: allow stop
+        tracing::debug!(session = %input.session_id, "Stop event allowed");
         let response = StopResponse::allow();
         let response_json = serde_json::to_string(&response)?;
-
-        tracing::debug!("Stop event allowed");
 
         Ok(HookResult {
             response: response_json,
@@ -121,6 +199,18 @@ impl HookHandler {
     #[must_use]
     pub fn policy(&self) -> &PolicyEngine {
         &self.policy
+    }
+
+    /// Get the iteration tracker.
+    #[must_use]
+    pub fn iterations(&self) -> &IterationTracker {
+        &self.iterations
+    }
+
+    /// Get the completion detector.
+    #[must_use]
+    pub fn completion(&self) -> &CompletionDetector {
+        &self.completion
     }
 }
 
@@ -214,5 +304,106 @@ mod tests {
 
         let result = handler.handle_json(input);
         assert!(matches!(result, Err(HookError::MissingField(_))));
+    }
+
+    #[test]
+    fn test_handle_stop_force_continue() {
+        let stop_config = StopConfig {
+            force_continue: true,
+            ..StopConfig::default()
+        };
+        let handler =
+            HookHandler::with_config(PolicyEngine::new(PolicyLevel::Permissive), stop_config);
+        let input = r#"{
+            "hook_event_name": "Stop",
+            "session_id": "test",
+            "stop_hook_active": false
+        }"#;
+
+        let result = handler.handle_json(input).unwrap();
+        assert!(!result.should_deny);
+        assert!(result.response.contains("\"decision\":\"block\""));
+        assert!(result.response.contains("Continue working on the task."));
+    }
+
+    #[test]
+    fn test_handle_stop_max_iterations_exceeded() {
+        let stop_config = StopConfig {
+            max_iterations: 2,
+            ..StopConfig::default()
+        };
+        let handler =
+            HookHandler::with_config(PolicyEngine::new(PolicyLevel::Permissive), stop_config);
+
+        // First two iterations should allow (force_continue is false by default)
+        for _ in 0..2 {
+            let input = r#"{
+                "hook_event_name": "Stop",
+                "session_id": "test_max",
+                "stop_hook_active": false
+            }"#;
+            let result = handler.handle_json(input).unwrap();
+            assert!(result.response.contains("\"decision\":\"allow\""));
+        }
+
+        // Third iteration exceeds max, should allow
+        let input = r#"{
+            "hook_event_name": "Stop",
+            "session_id": "test_max",
+            "stop_hook_active": false
+        }"#;
+        let result = handler.handle_json(input).unwrap();
+        assert!(result.response.contains("\"decision\":\"allow\""));
+    }
+
+    #[test]
+    fn test_handle_stop_hook_active_prevents_loop() {
+        let stop_config = StopConfig {
+            force_continue: true,
+            ..StopConfig::default()
+        };
+        let handler =
+            HookHandler::with_config(PolicyEngine::new(PolicyLevel::Permissive), stop_config);
+
+        // Even with force_continue, stop_hook_active=true should allow
+        let input = r#"{
+            "hook_event_name": "Stop",
+            "session_id": "test",
+            "stop_hook_active": true
+        }"#;
+
+        let result = handler.handle_json(input).unwrap();
+        assert!(result.response.contains("\"decision\":\"allow\""));
+    }
+
+    #[test]
+    fn test_with_config_constructor() {
+        let stop_config = StopConfig {
+            max_iterations: 100,
+            force_continue: true,
+            completion_phrases: vec!["done".to_string()],
+            incomplete_phrases: vec!["pending".to_string()],
+        };
+        let handler = HookHandler::with_config(PolicyEngine::new(PolicyLevel::Strict), stop_config);
+
+        assert_eq!(handler.stop_config().max_iterations, 100);
+        assert!(handler.stop_config().force_continue);
+    }
+
+    #[test]
+    fn test_iteration_tracking() {
+        let handler = create_handler(PolicyLevel::Permissive);
+
+        let input = r#"{
+            "hook_event_name": "Stop",
+            "session_id": "track_test",
+            "stop_hook_active": false
+        }"#;
+
+        handler.handle_json(input).unwrap();
+        assert_eq!(handler.iterations().get("track_test"), 1);
+
+        handler.handle_json(input).unwrap();
+        assert_eq!(handler.iterations().get("track_test"), 2);
     }
 }

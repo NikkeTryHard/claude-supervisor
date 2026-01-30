@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::supervisor::PolicyLevel;
 
+use super::StopConfig;
+
 /// Configuration for the supervisor.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SupervisorConfig {
@@ -19,6 +21,8 @@ pub struct SupervisorConfig {
     pub denied_tools: HashSet<String>,
     #[serde(default)]
     pub ai_supervisor: bool,
+    #[serde(default)]
+    pub stop: StopConfig,
 }
 
 impl Default for SupervisorConfig {
@@ -32,6 +36,7 @@ impl Default for SupervisorConfig {
                 .collect(),
             denied_tools: HashSet::new(),
             ai_supervisor: false,
+            stop: StopConfig::default(),
         }
     }
 }

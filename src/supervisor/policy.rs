@@ -17,9 +17,11 @@ pub enum PolicyLevel {
 }
 
 /// Decision from policy evaluation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum PolicyDecision {
     Allow,
+    /// Allow with modified tool input parameters.
+    AllowWithModification(serde_json::Value),
     Deny(String),
     Escalate(String),
 }
@@ -338,5 +340,17 @@ mod tests {
         let input = json!({ "file_path": "/project/.env" });
         let decision = engine.evaluate("Write", &input);
         assert!(matches!(decision, PolicyDecision::Deny(_)));
+    }
+
+    #[test]
+    fn test_allow_with_modification_variant() {
+        let modified = json!({ "command": "ls -la" });
+        let decision = PolicyDecision::AllowWithModification(modified.clone());
+
+        if let PolicyDecision::AllowWithModification(value) = decision {
+            assert_eq!(value, modified);
+        } else {
+            panic!("Expected AllowWithModification variant");
+        }
     }
 }

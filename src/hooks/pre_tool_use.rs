@@ -79,6 +79,19 @@ impl PreToolUseResponse {
         }
     }
 
+    /// Allow the tool call with modified input parameters.
+    #[must_use]
+    pub fn allow_with_modification(updated_input: serde_json::Value) -> Self {
+        Self {
+            hook_specific_output: PreToolUseOutput {
+                hook_event_name: "PreToolUse".to_string(),
+                permission_decision: PermissionDecision::Allow,
+                permission_decision_reason: Some("Input modified by supervisor".to_string()),
+                updated_input: Some(updated_input),
+            },
+        }
+    }
+
     /// Get the permission decision.
     #[must_use]
     pub fn decision(&self) -> PermissionDecision {
@@ -115,5 +128,16 @@ mod tests {
         let json = serde_json::to_string(&response).unwrap();
 
         assert!(json.contains("\"permissionDecision\":\"ask\""));
+    }
+
+    #[test]
+    fn test_allow_with_modification_response_format() {
+        let modified_input = serde_json::json!({ "command": "ls -la" });
+        let response = PreToolUseResponse::allow_with_modification(modified_input);
+        let json = serde_json::to_string(&response).unwrap();
+
+        assert!(json.contains("\"permissionDecision\":\"allow\""));
+        assert!(json.contains("\"updatedInput\""));
+        assert!(json.contains("\"command\":\"ls -la\""));
     }
 }

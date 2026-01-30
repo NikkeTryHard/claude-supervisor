@@ -540,17 +540,17 @@ async fn handle_run(
     config: SupervisorConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Handle worktree isolation if enabled
-    let working_dir = if config.worktree.enabled {
+    let (working_dir, worktree_cleanup_info) = if config.worktree.enabled {
         tracing::info!("Creating isolated worktree for task");
         let repo_root = std::env::current_dir()?;
         let manager = WorktreeManager::new(repo_root, config.worktree.clone())?;
-        let task_name = task.as_deref().unwrap_or("supervised-task");
-        let worktree = manager.create(task_name).await?;
+        let task_name = task.as_deref().unwrap_or("supervised-task").to_string();
+        let worktree = manager.create(&task_name).await?;
         let path = worktree.path.clone();
         tracing::info!(path = %path.display(), "Running in worktree");
-        Some(path)
+        (Some(path), Some((manager, task_name)))
     } else {
-        None
+        (None, None)
     };
 
     // Get prompt (task or "continue" for resume)
@@ -625,6 +625,16 @@ async fn handle_run(
         }
         SupervisorResult::Cancelled => {
             tracing::info!("Session cancelled");
+        }
+    }
+
+    // Cleanup worktree if configured
+    if let Some((manager, task_name)) = worktree_cleanup_info {
+        if config.worktree.auto_cleanup {
+            tracing::info!(worktree = %task_name, "Cleaning up worktree");
+            if let Err(e) = manager.remove(&task_name, false).await {
+                tracing::warn!(error = %e, "Failed to cleanup worktree");
+            }
         }
     }
 

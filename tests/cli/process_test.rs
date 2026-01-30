@@ -145,8 +145,8 @@ async fn take_stderr_once() {
 
 #[tokio::test]
 async fn try_wait_on_running_process() {
-    let builder = ClaudeProcessBuilder::new("1");
-    // sleep 1 second to ensure process is still running when we check
+    let builder = ClaudeProcessBuilder::new("10");
+    // sleep 10 seconds to ensure process is still running when we check
     let mut process = ClaudeProcess::spawn_with_binary("sleep", &builder).unwrap();
 
     // Process should still be running

@@ -1,0 +1,32 @@
+# Claude Supervisor - Development Environment
+#
+# Usage:
+#   docker compose up -d      # Start container
+#   docker compose exec app bash  # Shell into container
+#   docker compose down       # Stop container
+
+services:
+  app:
+    build: .
+    container_name: claude-supervisor
+    stdin_open: true
+    tty: true
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - RUST_LOG=info
+    volumes:
+      # Claude Code settings (read-only to protect host)
+      - ~/.claude/CLAUDE.md:/home/claude/.claude/CLAUDE.md:ro
+      - ~/.claude/settings.json:/home/claude/.claude/settings.json:ro
+      - ~/.claude/skills:/home/claude/.claude/skills:ro
+      - ~/.claude/hooks:/home/claude/.claude/hooks:ro
+      - ~/.claude.json:/home/claude/.claude.json:ro
+      # Supervisor config (editable)
+      - ./config.example.toml:/home/claude/.config/claude-supervisor/config.toml
+      # Mount current project for testing
+      - .:/home/claude/project
+    ports:
+      - "3000:3000"  # Dashboard
+    working_dir: /home/claude/project
+    entrypoint: ["bash"]

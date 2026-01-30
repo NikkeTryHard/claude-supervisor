@@ -4,6 +4,7 @@
 //! process spawner, stream parser, and policy engine together.
 
 use std::collections::VecDeque;
+use std::path::Path;
 use std::time::Duration;
 
 use tokio::sync::mpsc::Receiver;
@@ -11,6 +12,9 @@ use tokio::sync::mpsc::Receiver;
 use crate::ai::{AiClient, AiError, ContextCompressor, SupervisorContext, SupervisorDecision};
 use crate::cli::{
     ClaudeEvent, ClaudeProcess, ResultEvent, StreamParser, ToolUse, DEFAULT_CHANNEL_BUFFER,
+};
+use crate::knowledge::{
+    ClaudeMdSource, KnowledgeAggregator, KnowledgeSource, SessionHistorySource,
 };
 use crate::supervisor::{
     PolicyDecision, PolicyEngine, SessionState, SessionStateMachine, SessionStats,
@@ -80,6 +84,7 @@ pub struct Supervisor {
     event_history: VecDeque<ClaudeEvent>,
     cwd: Option<String>,
     task: Option<String>,
+    knowledge: Option<KnowledgeAggregator>,
 }
 
 impl Supervisor {
@@ -98,6 +103,7 @@ impl Supervisor {
             event_history: VecDeque::new(),
             cwd: None,
             task: None,
+            knowledge: None,
         }
     }
 
@@ -118,6 +124,7 @@ impl Supervisor {
             event_history: VecDeque::new(),
             cwd: None,
             task: None,
+            knowledge: None,
         }
     }
 
@@ -138,6 +145,7 @@ impl Supervisor {
             event_history: VecDeque::new(),
             cwd: None,
             task: None,
+            knowledge: None,
         }
     }
 
@@ -159,6 +167,7 @@ impl Supervisor {
             event_history: VecDeque::new(),
             cwd: None,
             task: None,
+            knowledge: None,
         }
     }
 
@@ -189,6 +198,7 @@ impl Supervisor {
             event_history: VecDeque::new(),
             cwd: None,
             task: None,
+            knowledge: None,
         })
     }
 
@@ -215,6 +225,7 @@ impl Supervisor {
             event_history: VecDeque::new(),
             cwd: None,
             task: None,
+            knowledge: None,
         })
     }
 
@@ -222,6 +233,49 @@ impl Supervisor {
     #[must_use]
     pub fn has_ai_supervisor(&self) -> bool {
         self.ai_client.is_some()
+    }
+
+    /// Initialize knowledge sources from a project directory.
+    ///
+    /// Loads CLAUDE.md (project and global) and session history.
+    pub async fn init_knowledge(&mut self, project_dir: &Path) {
+        let mut aggregator = KnowledgeAggregator::new();
+
+        // Load CLAUDE.md sources (project + global)
+        let claude_md = ClaudeMdSource::load_with_global(project_dir).await;
+        if claude_md.context_summary().is_some() {
+            tracing::info!("Loaded CLAUDE.md knowledge source");
+            aggregator.add_source(Box::new(claude_md));
+        }
+
+        // Load session history
+        let history = SessionHistorySource::load(project_dir).await;
+        if history.context_summary().is_some() {
+            tracing::info!(
+                pairs = history.pairs.len(),
+                "Loaded session history knowledge source"
+            );
+            aggregator.add_source(Box::new(history));
+        }
+
+        if aggregator.has_knowledge() {
+            self.knowledge = Some(aggregator);
+        } else {
+            tracing::debug!("No knowledge sources available");
+        }
+    }
+
+    /// Set a pre-built knowledge aggregator.
+    pub fn set_knowledge(&mut self, knowledge: KnowledgeAggregator) {
+        self.knowledge = Some(knowledge);
+    }
+
+    /// Check if knowledge sources are available.
+    #[must_use]
+    pub fn has_knowledge(&self) -> bool {
+        self.knowledge
+            .as_ref()
+            .is_some_and(KnowledgeAggregator::has_knowledge)
     }
 
     /// Get recent events from history (most recent first).
@@ -257,10 +311,25 @@ impl Supervisor {
         let events: Vec<ClaudeEvent> = self.event_history.iter().cloned().collect();
         let compressed_history = compressor.compress(&events);
 
-        let context_str = format!(
-            "Escalation reason: {reason}\n\n{}\n\nRecent Activity:\n{compressed_history}",
-            context.build()
-        );
+        // Build knowledge context if available
+        let knowledge_context = self
+            .knowledge
+            .as_ref()
+            .map(KnowledgeAggregator::build_context)
+            .filter(|s| !s.is_empty());
+
+        let context_str = if let Some(knowledge) = knowledge_context {
+            tracing::debug!("Including knowledge context in AI escalation");
+            format!(
+                "Escalation reason: {reason}\n\n{}\n\n## Project Knowledge\n\n{knowledge}\n\n## Recent Activity\n\n{compressed_history}",
+                context.build()
+            )
+        } else {
+            format!(
+                "Escalation reason: {reason}\n\n{}\n\nRecent Activity:\n{compressed_history}",
+                context.build()
+            )
+        };
 
         tokio::time::timeout(
             AI_SUPERVISOR_TIMEOUT,
@@ -773,5 +842,53 @@ mod tests {
     fn test_ai_error_timeout_variant() {
         let error = AiError::Timeout;
         assert_eq!(error.to_string(), "AI supervisor request timed out");
+    }
+
+    #[test]
+    fn test_supervisor_has_knowledge_default_false() {
+        let (supervisor, _tx) = create_test_supervisor();
+        assert!(!supervisor.has_knowledge());
+    }
+
+    #[test]
+    fn test_supervisor_set_knowledge() {
+        use crate::knowledge::KnowledgeFact;
+
+        struct MockSource;
+        impl KnowledgeSource for MockSource {
+            fn source_name(&self) -> &'static str {
+                "mock"
+            }
+            fn query(&self, _: &str) -> Option<KnowledgeFact> {
+                Some(KnowledgeFact {
+                    source: "mock".to_string(),
+                    content: "test fact".to_string(),
+                    relevance: 1.0,
+                })
+            }
+            fn context_summary(&self) -> Option<String> {
+                Some("Mock context".to_string())
+            }
+        }
+
+        let (mut supervisor, _tx) = create_test_supervisor();
+        let mut aggregator = KnowledgeAggregator::new();
+        aggregator.add_source(Box::new(MockSource));
+        supervisor.set_knowledge(aggregator);
+
+        assert!(supervisor.has_knowledge());
+    }
+
+    #[tokio::test]
+    async fn test_supervisor_init_knowledge_empty_dir() {
+        let (mut supervisor, _tx) = create_test_supervisor();
+        let temp_dir = std::env::temp_dir().join("supervisor_test_empty_nonexistent_12345");
+
+        // Use a path that definitely won't have CLAUDE.md
+        // Note: This may still load global ~/.claude/CLAUDE.md if it exists
+        supervisor.init_knowledge(&temp_dir).await;
+
+        // The test verifies init_knowledge doesn't panic on missing directories
+        // has_knowledge() may be true if global CLAUDE.md exists
     }
 }

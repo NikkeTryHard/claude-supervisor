@@ -6,4 +6,6 @@ pub mod commands;
 pub mod config;
 pub mod hooks;
 pub mod ipc;
+pub mod knowledge;
 pub mod supervisor;
+pub mod watcher;

@@ -539,6 +539,20 @@ async fn handle_run(
     resume: Option<String>,
     config: SupervisorConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // Handle worktree isolation if enabled
+    let working_dir = if config.worktree.enabled {
+        tracing::info!("Creating isolated worktree for task");
+        let repo_root = std::env::current_dir()?;
+        let manager = WorktreeManager::new(repo_root, config.worktree.clone())?;
+        let task_name = task.as_deref().unwrap_or("supervised-task");
+        let worktree = manager.create(task_name).await?;
+        let path = worktree.path.clone();
+        tracing::info!(path = %path.display(), "Running in worktree");
+        Some(path)
+    } else {
+        None
+    };
+
     // Get prompt (task or "continue" for resume)
     let prompt = task.unwrap_or_else(|| "continue".to_string());
 
@@ -554,6 +568,11 @@ async fn handle_run(
     if !config.allowed_tools.is_empty() {
         let tools: Vec<&str> = config.allowed_tools.iter().map(String::as_str).collect();
         builder = builder.allowed_tools(&tools);
+    }
+
+    // Set working directory if using worktree
+    if let Some(ref dir) = working_dir {
+        builder = builder.working_dir(dir);
     }
 
     tracing::info!("Spawning Claude Code process");
@@ -577,9 +596,10 @@ async fn handle_run(
     // Set task context
     supervisor.set_task(&prompt);
 
-    // Initialize knowledge from current directory
+    // Initialize knowledge from working directory (worktree or current)
     let cwd = std::env::current_dir()?;
-    supervisor.init_knowledge(&cwd).await;
+    let knowledge_dir = working_dir.clone().unwrap_or_else(|| cwd.clone());
+    supervisor.init_knowledge(&knowledge_dir).await;
 
     // Run supervision loop
     tracing::info!("Starting supervision loop");

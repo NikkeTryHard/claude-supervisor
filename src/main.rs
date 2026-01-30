@@ -1,14 +1,16 @@
 //! Claude Supervisor - Automated Claude Code with AI oversight.
 
 use std::io::{self, BufRead, Write};
+use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use claude_supervisor::commands::HookInstaller;
-use claude_supervisor::config::{ConfigLoader, PolicyConfig, SupervisorConfig};
+use claude_supervisor::config::{ConfigLoader, PolicyConfig, SupervisorConfig, WorktreeConfig};
 use claude_supervisor::hooks::HookHandler;
 use claude_supervisor::supervisor::{PolicyEngine, PolicyLevel};
+use claude_supervisor::worktree::{WorktreeManager, WorktreeRegistry};
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum PolicyArg {
@@ -60,6 +62,15 @@ enum Commands {
         /// Resume a previous session by ID.
         #[arg(long, conflicts_with = "task")]
         resume: Option<String>,
+        /// Run in an isolated git worktree.
+        #[arg(long)]
+        worktree: bool,
+        /// Custom worktree directory (default: .worktrees).
+        #[arg(long)]
+        worktree_dir: Option<PathBuf>,
+        /// Cleanup worktree after session ends.
+        #[arg(long)]
+        worktree_cleanup: bool,
     },
     /// Install hooks into Claude Code settings.
     InstallHooks,
@@ -75,6 +86,11 @@ enum Commands {
         #[command(subcommand)]
         action: ConfigAction,
     },
+    /// Manage git worktrees for session isolation.
+    Worktree {
+        #[command(subcommand)]
+        action: WorktreeAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -89,6 +105,32 @@ enum HookEvent {
 enum ConfigAction {
     /// Show current configuration.
     Show,
+}
+
+#[derive(Subcommand, Clone)]
+enum WorktreeAction {
+    /// List all managed worktrees.
+    List,
+    /// Remove a worktree.
+    Remove {
+        /// Name of the worktree to remove.
+        name: String,
+        /// Force removal even with uncommitted changes.
+        #[arg(short, long)]
+        force: bool,
+        /// Also delete the associated branch.
+        #[arg(long)]
+        delete_branch: bool,
+    },
+    /// Prune stale worktrees older than specified hours.
+    Prune {
+        /// Maximum age in hours (default: 24).
+        #[arg(long, default_value = "24")]
+        hours: u64,
+        /// Force removal even with uncommitted changes.
+        #[arg(short, long)]
+        force: bool,
+    },
 }
 
 fn init_tracing(verbosity: u8) {
@@ -280,6 +322,146 @@ fn handle_uninstall_hooks() {
     }
 }
 
+#[allow(clippy::too_many_lines)]
+async fn handle_worktree(action: WorktreeAction) {
+    // Get current directory as repo root
+    let repo_root = match std::env::current_dir() {
+        Ok(dir) => dir,
+        Err(e) => {
+            eprintln!("Failed to get current directory: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    let config = WorktreeConfig::default();
+    let manager = match WorktreeManager::new(repo_root, config) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("Failed to initialize worktree manager: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    match action {
+        WorktreeAction::List => {
+            let registry_path = WorktreeRegistry::default_path(&manager.worktree_dir());
+            let registry = match WorktreeRegistry::load(&registry_path) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("Failed to load registry: {e}");
+                    std::process::exit(1);
+                }
+            };
+
+            let worktrees = registry.list();
+            if worktrees.is_empty() {
+                println!("No managed worktrees found.");
+            } else {
+                println!("Managed worktrees:");
+                for wt in worktrees {
+                    let status = match wt.status {
+                        claude_supervisor::worktree::WorktreeStatus::Active => "active",
+                        claude_supervisor::worktree::WorktreeStatus::Idle => "idle",
+                        claude_supervisor::worktree::WorktreeStatus::PendingCleanup => "cleanup",
+                    };
+                    println!(
+                        "  {} [{}] - {} ({})",
+                        wt.name,
+                        status,
+                        wt.branch,
+                        wt.path.display()
+                    );
+                }
+            }
+        }
+        WorktreeAction::Remove {
+            name,
+            force,
+            delete_branch,
+        } => {
+            // Load registry
+            let registry_path = WorktreeRegistry::default_path(&manager.worktree_dir());
+            let mut registry = match WorktreeRegistry::load(&registry_path) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("Failed to load registry: {e}");
+                    std::process::exit(1);
+                }
+            };
+
+            // Get branch name before removal
+            let branch_name = registry.get(&name).map(|wt| wt.branch.clone());
+
+            // Remove worktree
+            match manager.remove(&name, force).await {
+                Ok(()) => {
+                    println!("Worktree '{name}' removed.");
+
+                    // Update registry
+                    registry.remove(&name);
+                    if let Err(e) = registry.save(&registry_path) {
+                        eprintln!("Warning: Failed to update registry: {e}");
+                    }
+
+                    // Delete branch if requested
+                    if delete_branch {
+                        if let Some(branch) = branch_name {
+                            match manager.delete_branch(&branch, force).await {
+                                Ok(()) => println!("Branch '{branch}' deleted."),
+                                Err(e) => eprintln!("Warning: Failed to delete branch: {e}"),
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Failed to remove worktree: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        WorktreeAction::Prune { hours, force } => {
+            let registry_path = WorktreeRegistry::default_path(&manager.worktree_dir());
+            let mut registry = match WorktreeRegistry::load(&registry_path) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("Failed to load registry: {e}");
+                    std::process::exit(1);
+                }
+            };
+
+            #[allow(clippy::cast_possible_wrap)]
+            let max_age = chrono::Duration::hours(hours as i64);
+            let stale: Vec<_> = registry
+                .find_stale(max_age)
+                .iter()
+                .map(|wt| wt.name.clone())
+                .collect();
+
+            if stale.is_empty() {
+                println!("No stale worktrees found (older than {hours} hours).");
+                return;
+            }
+
+            println!("Pruning {} stale worktree(s)...", stale.len());
+            for name in stale {
+                match manager.remove(&name, force).await {
+                    Ok(()) => {
+                        registry.remove(&name);
+                        println!("  Removed: {name}");
+                    }
+                    Err(e) => {
+                        eprintln!("  Failed to remove '{name}': {e}");
+                    }
+                }
+            }
+
+            if let Err(e) = registry.save(&registry_path) {
+                eprintln!("Warning: Failed to update registry: {e}");
+            }
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
@@ -292,6 +474,9 @@ async fn main() {
             auto_continue,
             allowed_tools,
             resume,
+            worktree,
+            worktree_dir,
+            worktree_cleanup,
         } => {
             // Validate: either task or resume must be provided
             if task.is_none() && resume.is_none() {
@@ -310,6 +495,17 @@ async fn main() {
                 config.allowed_tools = tools.into_iter().collect();
             }
 
+            // Configure worktree settings
+            if worktree {
+                config.worktree.enabled = true;
+            }
+            if let Some(dir) = worktree_dir {
+                config.worktree.worktree_dir = dir;
+            }
+            if worktree_cleanup {
+                config.worktree.auto_cleanup = true;
+            }
+
             // Log based on task or resume mode
             if let Some(ref task_str) = task {
                 tracing::info!(
@@ -317,6 +513,7 @@ async fn main() {
                     policy = ?config.policy,
                     auto_continue = config.auto_continue,
                     allowed_tools = ?config.allowed_tools,
+                    worktree_enabled = config.worktree.enabled,
                     "Starting Claude supervisor"
                 );
             } else if let Some(ref session_id) = resume {
@@ -325,6 +522,7 @@ async fn main() {
                     policy = ?config.policy,
                     auto_continue = config.auto_continue,
                     allowed_tools = ?config.allowed_tools,
+                    worktree_enabled = config.worktree.enabled,
                     "Resuming Claude supervisor session"
                 );
             }
@@ -342,6 +540,9 @@ async fn main() {
         }
         Commands::Config { action } => {
             handle_config(action);
+        }
+        Commands::Worktree { action } => {
+            handle_worktree(action).await;
         }
     }
 }

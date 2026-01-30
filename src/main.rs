@@ -5,6 +5,7 @@ use std::io::{self, BufRead, Write};
 use clap::{Parser, Subcommand, ValueEnum};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
+use claude_supervisor::commands::HookInstaller;
 use claude_supervisor::config::{ConfigLoader, PolicyConfig, SupervisorConfig};
 use claude_supervisor::hooks::HookHandler;
 use claude_supervisor::supervisor::{PolicyEngine, PolicyLevel};
@@ -62,6 +63,8 @@ enum Commands {
     },
     /// Install hooks into Claude Code settings.
     InstallHooks,
+    /// Uninstall hooks from Claude Code settings.
+    UninstallHooks,
     /// Handle Claude Code hook events (reads JSON from stdin).
     Hook {
         #[command(subcommand)]
@@ -200,6 +203,83 @@ fn handle_config(action: ConfigAction) {
     }
 }
 
+fn handle_install_hooks() {
+    let installer = match HookInstaller::from_current_exe() {
+        Ok(i) => i,
+        Err(e) => {
+            eprintln!("Failed to create hook installer: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    match installer.install() {
+        Ok(result) => {
+            println!("Hooks installed successfully!");
+            println!("  Settings file: {}", result.settings_path.display());
+            println!(
+                "  PreToolUse: {}",
+                if result.pre_tool_use_installed {
+                    "installed"
+                } else {
+                    "skipped"
+                }
+            );
+            println!(
+                "  Stop: {}",
+                if result.stop_installed {
+                    "installed"
+                } else {
+                    "skipped"
+                }
+            );
+            if result.replaced_existing {
+                println!("  (Replaced existing supervisor hooks)");
+            }
+        }
+        Err(e) => {
+            eprintln!("Failed to install hooks: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn handle_uninstall_hooks() {
+    let installer = match HookInstaller::from_current_exe() {
+        Ok(i) => i,
+        Err(e) => {
+            eprintln!("Failed to create hook installer: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    match installer.uninstall() {
+        Ok(result) => {
+            println!("Hooks uninstalled successfully!");
+            println!("  Settings file: {}", result.settings_path.display());
+            println!(
+                "  PreToolUse: {}",
+                if result.pre_tool_use_removed {
+                    "removed"
+                } else {
+                    "not found"
+                }
+            );
+            println!(
+                "  Stop: {}",
+                if result.stop_removed {
+                    "removed"
+                } else {
+                    "not found"
+                }
+            );
+        }
+        Err(e) => {
+            eprintln!("Failed to uninstall hooks: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
@@ -252,8 +332,10 @@ async fn main() {
             tracing::warn!("Supervisor not yet implemented");
         }
         Commands::InstallHooks => {
-            tracing::warn!("install-hooks not yet implemented (Phase 2)");
-            eprintln!("install-hooks will be implemented in Phase 2");
+            handle_install_hooks();
+        }
+        Commands::UninstallHooks => {
+            handle_uninstall_hooks();
         }
         Commands::Hook { event } => {
             handle_hook(event);

@@ -1,6 +1,7 @@
 //! Hook handler that processes Claude Code hook events.
 
 use crate::config::StopConfig;
+use crate::ipc::{EscalationRequest, EscalationResponse, IpcClient};
 use crate::supervisor::{PolicyDecision, PolicyEngine};
 
 use super::completion::CompletionDetector;
@@ -38,6 +39,7 @@ pub struct HookHandler {
     stop_config: StopConfig,
     iterations: IterationTracker,
     completion: CompletionDetector,
+    ipc_client: Option<IpcClient>,
 }
 
 impl HookHandler {
@@ -49,6 +51,7 @@ impl HookHandler {
             stop_config: StopConfig::default(),
             iterations: IterationTracker::new(),
             completion: CompletionDetector::default(),
+            ipc_client: None,
         }
     }
 
@@ -64,7 +67,27 @@ impl HookHandler {
             stop_config,
             iterations: IterationTracker::new(),
             completion,
+            ipc_client: None,
         }
+    }
+
+    /// Add an IPC client for escalation to supervisor.
+    #[must_use]
+    pub fn with_ipc_client(mut self, client: IpcClient) -> Self {
+        self.ipc_client = Some(client);
+        self
+    }
+
+    /// Returns whether an IPC client is configured.
+    #[must_use]
+    pub fn has_ipc_client(&self) -> bool {
+        self.ipc_client.is_some()
+    }
+
+    /// Returns a reference to the IPC client if configured.
+    #[must_use]
+    pub fn ipc_client(&self) -> Option<&IpcClient> {
+        self.ipc_client.as_ref()
     }
 
     /// Get the stop configuration.
@@ -211,6 +234,63 @@ impl HookHandler {
     #[must_use]
     pub fn completion(&self) -> &CompletionDetector {
         &self.completion
+    }
+
+    /// Attempt to escalate a tool call to the supervisor via IPC.
+    ///
+    /// Returns `None` if no IPC client is configured or the supervisor is not running.
+    /// Returns `Some(response)` if the supervisor responded to the escalation.
+    ///
+    /// This method is designed to be called when a policy decision results in
+    /// escalation and a supervisor is available to make the final decision.
+    pub async fn try_escalate(
+        &self,
+        session_id: &str,
+        tool_name: &str,
+        tool_input: &serde_json::Value,
+        reason: &str,
+    ) -> Option<EscalationResponse> {
+        let client = self.ipc_client.as_ref()?;
+
+        if !client.is_supervisor_running() {
+            tracing::debug!("Supervisor not running, skipping escalation");
+            return None;
+        }
+
+        let request = EscalationRequest {
+            session_id: session_id.to_string(),
+            tool_name: tool_name.to_string(),
+            tool_input: tool_input.clone(),
+            reason: reason.to_string(),
+        };
+
+        tracing::debug!(
+            session_id = %session_id,
+            tool_name = %tool_name,
+            reason = %reason,
+            "Escalating to supervisor"
+        );
+
+        match client.escalate(&request).await {
+            Ok(response) => {
+                tracing::info!(
+                    session_id = %session_id,
+                    tool_name = %tool_name,
+                    response = ?response,
+                    "Received supervisor response"
+                );
+                Some(response)
+            }
+            Err(e) => {
+                tracing::warn!(
+                    session_id = %session_id,
+                    tool_name = %tool_name,
+                    error = %e,
+                    "Failed to escalate to supervisor"
+                );
+                None
+            }
+        }
     }
 }
 
@@ -405,5 +485,50 @@ mod tests {
 
         handler.handle_json(input).unwrap();
         assert_eq!(handler.iterations().get("track_test"), 2);
+    }
+
+    #[test]
+    fn test_with_ipc_client() {
+        let handler = create_handler(PolicyLevel::Permissive);
+        assert!(!handler.has_ipc_client());
+        assert!(handler.ipc_client().is_none());
+
+        let client = IpcClient::with_path("/tmp/test.sock");
+        let handler = handler.with_ipc_client(client);
+        assert!(handler.has_ipc_client());
+        assert!(handler.ipc_client().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_try_escalate_no_client() {
+        let handler = create_handler(PolicyLevel::Permissive);
+
+        let result = handler
+            .try_escalate(
+                "session-1",
+                "Bash",
+                &serde_json::json!({"command": "ls"}),
+                "Test escalation",
+            )
+            .await;
+
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_try_escalate_supervisor_not_running() {
+        let client = IpcClient::with_path("/nonexistent/socket.sock");
+        let handler = create_handler(PolicyLevel::Permissive).with_ipc_client(client);
+
+        let result = handler
+            .try_escalate(
+                "session-1",
+                "Bash",
+                &serde_json::json!({"command": "ls"}),
+                "Test escalation",
+            )
+            .await;
+
+        assert!(result.is_none());
     }
 }

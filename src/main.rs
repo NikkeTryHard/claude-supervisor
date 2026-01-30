@@ -7,7 +7,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use claude_supervisor::ai::AiClient;
-use claude_supervisor::cli::{ClaudeProcess, ClaudeProcessBuilder};
+use claude_supervisor::cli::{ClaudeProcess, ClaudeProcessBuilder, SpawnError};
 use claude_supervisor::commands::HookInstaller;
 use claude_supervisor::config::{ConfigLoader, PolicyConfig, SupervisorConfig, WorktreeConfig};
 use claude_supervisor::hooks::HookHandler;
@@ -707,6 +707,24 @@ async fn main() {
             }
 
             if let Err(e) = handle_run(task, resume, config).await {
+                // Provide user-friendly error messages for common failures
+                if let Some(spawn_err) = e.downcast_ref::<SpawnError>() {
+                    match spawn_err {
+                        SpawnError::NotFound => {
+                            eprintln!(
+                                "error: Claude CLI not found. Is 'claude' installed and in PATH?"
+                            );
+                        }
+                        SpawnError::PermissionDenied => {
+                            eprintln!("error: Permission denied when spawning Claude CLI");
+                        }
+                        SpawnError::Io(_) => {
+                            eprintln!("error: {e}");
+                        }
+                    }
+                } else {
+                    eprintln!("error: {e}");
+                }
                 tracing::error!(error = %e, "Supervisor failed");
                 std::process::exit(1);
             }

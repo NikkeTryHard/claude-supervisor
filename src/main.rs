@@ -534,7 +534,6 @@ async fn handle_multi(
 }
 
 /// Handle the run command - spawn and supervise Claude Code.
-#[allow(dead_code)] // Will be wired in Batch 2
 async fn handle_run(
     task: Option<String>,
     resume: Option<String>,
@@ -677,7 +676,10 @@ async fn main() {
                 );
             }
 
-            tracing::warn!("Supervisor not yet implemented");
+            if let Err(e) = handle_run(task, resume, config).await {
+                tracing::error!(error = %e, "Supervisor failed");
+                std::process::exit(1);
+            }
         }
         Commands::InstallHooks => {
             handle_install_hooks();

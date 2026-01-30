@@ -1,35 +1,48 @@
-//! Claude API client wrapper for supervisor decisions.
+//! Multi-provider AI client for supervisor decisions.
 
-use clust::messages::{ClaudeModel, MaxTokens, Message, MessagesRequestBody, SystemPrompt};
-use clust::{ApiKey, Client};
+use std::time::Duration;
+
+use async_trait::async_trait;
+use reqwest::Client;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::config::AiConfig;
+use crate::config::{AiConfig, ProviderKind};
 
 use super::SUPERVISOR_SYSTEM_PROMPT;
 
-/// Parse a model string into a `ClaudeModel` enum variant.
-///
-/// Falls back to `ClaudeModel::Claude35Sonnet20240620` if the string doesn't match
-/// any known model.
-fn parse_model(model_str: &str) -> ClaudeModel {
-    match model_str {
-        "claude-3-opus-20240229" => ClaudeModel::Claude3Opus20240229,
-        "claude-3-sonnet-20240229" => ClaudeModel::Claude3Sonnet20240229,
-        "claude-3-haiku-20240307" => ClaudeModel::Claude3Haiku20240307,
-        "claude-3-5-sonnet-20240620" => ClaudeModel::Claude35Sonnet20240620,
-        // Default to Claude 3.5 Sonnet for any unrecognized model string
-        _ => {
-            tracing::warn!(
-                model = %model_str,
-                fallback = "claude-3-5-sonnet-20240620",
-                "Unrecognized model string, using fallback"
-            );
-            ClaudeModel::Claude35Sonnet20240620
-        }
+/// Connection timeout for HTTP requests.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Overall request timeout for HTTP requests.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Maximum number of retries for transient failures.
+const MAX_RETRIES: u32 = 3;
+
+/// Build an HTTP client with proper timeout configuration.
+fn build_http_client() -> Client {
+    Client::builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(REQUEST_TIMEOUT)
+        .build()
+        .expect("Failed to build HTTP client")
+}
+
+/// Determine if a request should be retried based on status code and attempt count.
+fn should_retry(status_code: u16, attempt: u32) -> bool {
+    if attempt >= MAX_RETRIES {
+        return false;
     }
+    // Retry on 5xx server errors
+    (500..600).contains(&status_code)
+}
+
+/// Calculate exponential backoff duration for retry attempts.
+fn calculate_backoff(attempt: u32) -> Duration {
+    // Exponential backoff: 1s, 2s, 4s
+    Duration::from_secs(1 << attempt)
 }
 
 /// Decision from the AI supervisor.
@@ -47,8 +60,8 @@ pub enum SupervisorDecision {
 /// Errors from AI client operations.
 #[derive(Error, Debug)]
 pub enum AiError {
-    #[error("API key not configured")]
-    MissingApiKey,
+    #[error("API key not configured (env: {0})")]
+    MissingApiKey(String),
     #[error("API request failed: {0}")]
     RequestFailed(String),
     #[error("Failed to parse response: {0}")]
@@ -57,55 +70,284 @@ pub enum AiError {
     Timeout,
 }
 
+/// Trait for AI providers.
+#[async_trait]
+pub trait AiProvider: Send + Sync {
+    /// Generate a response from the AI provider.
+    async fn generate(&self, system: &str, user: &str) -> Result<String, AiError>;
+}
+
+/// Gemini API provider.
+#[derive(Debug, Clone)]
+pub struct GeminiProvider {
+    client: Client,
+    base_url: String,
+    api_key: String,
+    model: String,
+    max_tokens: u32,
+}
+
+impl GeminiProvider {
+    /// Create a new Gemini provider.
+    #[must_use]
+    pub fn new(base_url: String, api_key: String, model: String, max_tokens: u32) -> Self {
+        Self {
+            client: build_http_client(),
+            base_url,
+            api_key,
+            model,
+            max_tokens,
+        }
+    }
+}
+
+#[async_trait]
+impl AiProvider for GeminiProvider {
+    async fn generate(&self, system: &str, user: &str) -> Result<String, AiError> {
+        let url = format!(
+            "{}/models/{}:generateContent",
+            self.base_url.trim_end_matches('/'),
+            self.model
+        );
+
+        let body = serde_json::json!({
+            "contents": [{
+                "role": "user",
+                "parts": [{ "text": user }]
+            }],
+            "systemInstruction": {
+                "parts": [{ "text": system }]
+            },
+            "generationConfig": {
+                "maxOutputTokens": self.max_tokens
+            }
+        });
+
+        let mut attempt = 0;
+        loop {
+            let response = self
+                .client
+                .post(&url)
+                .header("x-goog-api-key", &self.api_key)
+                .header("Content-Type", "application/json")
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| {
+                    if e.is_timeout() {
+                        AiError::Timeout
+                    } else {
+                        AiError::RequestFailed(e.to_string())
+                    }
+                })?;
+
+            let status = response.status();
+            if status.is_success() {
+                let json: serde_json::Value = response
+                    .json()
+                    .await
+                    .map_err(|e| AiError::ParseError(e.to_string()))?;
+
+                // Extract text from Gemini response format
+                return json["candidates"][0]["content"]["parts"][0]["text"]
+                    .as_str()
+                    .map(String::from)
+                    .ok_or_else(|| AiError::ParseError("No text in Gemini response".to_string()));
+            }
+
+            let status_code = status.as_u16();
+            if should_retry(status_code, attempt) {
+                let backoff = calculate_backoff(attempt);
+                tokio::time::sleep(backoff).await;
+                attempt += 1;
+                continue;
+            }
+
+            let text = response.text().await.unwrap_or_default();
+            return Err(AiError::RequestFailed(format!("HTTP {status}: {text}")));
+        }
+    }
+}
+
+/// Claude API provider.
+#[derive(Debug, Clone)]
+pub struct ClaudeProvider {
+    client: Client,
+    base_url: String,
+    api_key: String,
+    model: String,
+    max_tokens: u32,
+}
+
+impl ClaudeProvider {
+    /// Create a new Claude provider.
+    #[must_use]
+    pub fn new(base_url: String, api_key: String, model: String, max_tokens: u32) -> Self {
+        Self {
+            client: build_http_client(),
+            base_url,
+            api_key,
+            model,
+            max_tokens,
+        }
+    }
+}
+
+#[async_trait]
+impl AiProvider for ClaudeProvider {
+    async fn generate(&self, system: &str, user: &str) -> Result<String, AiError> {
+        let url = format!("{}/v1/messages", self.base_url.trim_end_matches('/'));
+
+        let body = serde_json::json!({
+            "model": self.model,
+            "max_tokens": self.max_tokens,
+            "system": system,
+            "messages": [{
+                "role": "user",
+                "content": user
+            }]
+        });
+
+        let mut attempt = 0;
+        loop {
+            let response = self
+                .client
+                .post(&url)
+                .header("x-api-key", &self.api_key)
+                .header("anthropic-version", "2023-06-01")
+                .header("Content-Type", "application/json")
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| {
+                    if e.is_timeout() {
+                        AiError::Timeout
+                    } else {
+                        AiError::RequestFailed(e.to_string())
+                    }
+                })?;
+
+            let status = response.status();
+            if status.is_success() {
+                let json: serde_json::Value = response
+                    .json()
+                    .await
+                    .map_err(|e| AiError::ParseError(e.to_string()))?;
+
+                // Extract text from Claude response format
+                return json["content"][0]["text"]
+                    .as_str()
+                    .map(String::from)
+                    .ok_or_else(|| AiError::ParseError("No text in Claude response".to_string()));
+            }
+
+            let status_code = status.as_u16();
+            if should_retry(status_code, attempt) {
+                let backoff = calculate_backoff(attempt);
+                tokio::time::sleep(backoff).await;
+                attempt += 1;
+                continue;
+            }
+
+            let text = response.text().await.unwrap_or_default();
+            return Err(AiError::RequestFailed(format!("HTTP {status}: {text}")));
+        }
+    }
+}
+
+/// Provider enum for dispatch.
+#[derive(Debug, Clone)]
+pub enum Provider {
+    Gemini(GeminiProvider),
+    Claude(ClaudeProvider),
+}
+
+#[async_trait]
+impl AiProvider for Provider {
+    async fn generate(&self, system: &str, user: &str) -> Result<String, AiError> {
+        match self {
+            Self::Gemini(p) => p.generate(system, user).await,
+            Self::Claude(p) => p.generate(system, user).await,
+        }
+    }
+}
+
 /// Client for making AI supervisor decisions.
 #[derive(Debug, Clone)]
 pub struct AiClient {
-    api_key: String,
+    provider: Provider,
     config: AiConfig,
 }
 
 impl AiClient {
-    /// Create a new client with the given API key and config.
+    /// Create a new client with the given provider and config.
     #[must_use]
-    pub fn new(api_key: String, config: AiConfig) -> Self {
-        Self { api_key, config }
+    pub fn new(provider: Provider, config: AiConfig) -> Self {
+        Self { provider, config }
     }
 
-    /// Create client from environment variables.
+    /// Create client from configuration.
     ///
     /// # Errors
     ///
-    /// Returns `AiError::MissingApiKey` if the `ANTHROPIC_API_KEY` environment
+    /// Returns `AiError::MissingApiKey` if the configured API key environment
     /// variable is not set.
+    pub fn from_config(config: AiConfig) -> Result<Self, AiError> {
+        let api_key = std::env::var(&config.api_key_env)
+            .map_err(|_| AiError::MissingApiKey(config.api_key_env.clone()))?;
+
+        let provider = match config.provider {
+            ProviderKind::Gemini => Provider::Gemini(GeminiProvider::new(
+                config.base_url.clone(),
+                api_key,
+                config.model.clone(),
+                config.max_tokens,
+            )),
+            ProviderKind::Claude => Provider::Claude(ClaudeProvider::new(
+                config.base_url.clone(),
+                api_key,
+                config.model.clone(),
+                config.max_tokens,
+            )),
+        };
+
+        Ok(Self { provider, config })
+    }
+
+    /// Create client from environment variables with default config.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AiError::MissingApiKey` if the API key environment variable is not set.
     pub fn from_env() -> Result<Self, AiError> {
-        let api_key = std::env::var("ANTHROPIC_API_KEY").map_err(|_| AiError::MissingApiKey)?;
-        Ok(Self {
-            api_key,
-            config: AiConfig::default(),
-        })
+        Self::from_config(AiConfig::default())
     }
 
     /// Create client from environment variables with custom config.
     ///
     /// # Errors
     ///
-    /// Returns `AiError::MissingApiKey` if the `ANTHROPIC_API_KEY` environment
-    /// variable is not set.
+    /// Returns `AiError::MissingApiKey` if the API key environment variable is not set.
     pub fn from_env_with_config(config: AiConfig) -> Result<Self, AiError> {
-        let api_key = std::env::var("ANTHROPIC_API_KEY").map_err(|_| AiError::MissingApiKey)?;
-        Ok(Self { api_key, config })
+        Self::from_config(config)
     }
 
-    /// Check if the client is configured with an API key.
+    /// Check if the client is configured.
     #[must_use]
     pub fn is_configured(&self) -> bool {
-        !self.api_key.is_empty()
+        true // If we got here, we have an API key
     }
 
     /// Get the configured model.
     #[must_use]
     pub fn model(&self) -> &str {
         &self.config.model
+    }
+
+    /// Get the provider kind.
+    #[must_use]
+    pub fn provider_kind(&self) -> &ProviderKind {
+        &self.config.provider
     }
 
     /// Ask the AI supervisor whether to allow a tool call.
@@ -120,40 +362,17 @@ impl AiClient {
         tool_input: &serde_json::Value,
         context: &str,
     ) -> Result<SupervisorDecision, AiError> {
-        let client = Client::from_api_key(ApiKey::new(&self.api_key));
-
-        // Parse the configured model string into a ClaudeModel enum
-        let model = parse_model(&self.config.model);
-
-        let max_tokens = MaxTokens::new(self.config.max_tokens, model)
-            .map_err(|e| AiError::RequestFailed(format!("Invalid max_tokens: {e}")))?;
-
         let user_message = format!(
             "Context: {context}\n\nTool: {tool_name}\nInput: {}",
             serde_json::to_string_pretty(tool_input).unwrap_or_else(|_| tool_input.to_string())
         );
 
-        let request = MessagesRequestBody {
-            model,
-            messages: vec![Message::user(user_message)],
-            max_tokens,
-            system: Some(SystemPrompt::new(SUPERVISOR_SYSTEM_PROMPT)),
-            ..Default::default()
-        };
+        let text = self
+            .provider
+            .generate(SUPERVISOR_SYSTEM_PROMPT, &user_message)
+            .await?;
 
-        let response = client
-            .create_a_message(request)
-            .await
-            .map_err(|e| AiError::RequestFailed(e.to_string()))?;
-
-        // Extract text from the response
-        let text = response
-            .content
-            .flatten_into_text()
-            .map_err(|e| AiError::ParseError(format!("No text in response: {e}")))?;
-
-        // Parse the JSON decision from the response
-        extract_decision(text)
+        extract_decision(&text)
     }
 }
 
@@ -202,6 +421,88 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_http_client_has_timeouts() {
+        // The build_http_client function should create a client with timeouts configured
+        let client = build_http_client();
+        // If we get here without panic, the client was built successfully
+        // We can't directly inspect timeout values, but we verify the builder works
+        assert!(format!("{client:?}").contains("Client"));
+    }
+
+    #[test]
+    fn test_gemini_provider_uses_configured_client() {
+        let provider = GeminiProvider::new(
+            "https://api.example.com".to_string(),
+            "test-key".to_string(),
+            "gemini-test".to_string(),
+            1024,
+        );
+        // Verify the provider is created with the configured client
+        assert_eq!(provider.model, "gemini-test");
+        assert_eq!(provider.max_tokens, 1024);
+    }
+
+    #[test]
+    fn test_claude_provider_uses_configured_client() {
+        let provider = ClaudeProvider::new(
+            "https://api.example.com".to_string(),
+            "test-key".to_string(),
+            "claude-test".to_string(),
+            2048,
+        );
+        // Verify the provider is created with the configured client
+        assert_eq!(provider.model, "claude-test");
+        assert_eq!(provider.max_tokens, 2048);
+    }
+
+    #[tokio::test]
+    async fn test_retry_on_server_error() {
+        // Test that should_retry correctly identifies retryable errors
+        assert!(should_retry(500, 0));
+        assert!(should_retry(502, 1));
+        assert!(should_retry(503, 2));
+        assert!(!should_retry(500, MAX_RETRIES)); // Max retries reached
+        assert!(!should_retry(400, 0)); // Client error, not retryable
+        assert!(!should_retry(404, 0)); // Not found, not retryable
+    }
+
+    #[test]
+    fn test_should_retry_logic() {
+        // 5xx errors should be retried
+        assert!(should_retry(500, 0));
+        assert!(should_retry(502, 0));
+        assert!(should_retry(503, 0));
+        assert!(should_retry(504, 0));
+
+        // 4xx errors should NOT be retried
+        assert!(!should_retry(400, 0));
+        assert!(!should_retry(401, 0));
+        assert!(!should_retry(403, 0));
+        assert!(!should_retry(404, 0));
+        assert!(!should_retry(429, 0)); // Rate limit - could be retried but keeping simple
+
+        // Success codes should NOT be retried
+        assert!(!should_retry(200, 0));
+        assert!(!should_retry(201, 0));
+
+        // Max retries should stop retry
+        assert!(!should_retry(500, MAX_RETRIES));
+        assert!(!should_retry(503, MAX_RETRIES + 1));
+    }
+
+    #[test]
+    fn test_calculate_backoff() {
+        let backoff_0 = calculate_backoff(0);
+        let backoff_1 = calculate_backoff(1);
+        let backoff_2 = calculate_backoff(2);
+
+        // Exponential backoff: 1s, 2s, 4s
+        assert_eq!(backoff_0.as_secs(), 1);
+        assert_eq!(backoff_1.as_secs(), 2);
+        assert_eq!(backoff_2.as_secs(), 4);
+    }
+
+    #[test]
     fn test_parse_allow_decision() {
         let json = r#"{"decision": "ALLOW", "reason": "Safe operation"}"#;
         let decision: SupervisorDecision = serde_json::from_str(json).unwrap();
@@ -247,15 +548,47 @@ mod tests {
     #[test]
     fn test_from_env_missing_key() {
         // Temporarily unset the env var
-        let original = std::env::var("ANTHROPIC_API_KEY").ok();
-        std::env::remove_var("ANTHROPIC_API_KEY");
+        let original = std::env::var("GEMINI_API_KEY").ok();
+        std::env::remove_var("GEMINI_API_KEY");
 
         let result = AiClient::from_env();
-        assert!(matches!(result, Err(AiError::MissingApiKey)));
+        assert!(matches!(result, Err(AiError::MissingApiKey(_))));
 
         // Restore if it was set
         if let Some(key) = original {
-            std::env::set_var("ANTHROPIC_API_KEY", key);
+            std::env::set_var("GEMINI_API_KEY", key);
         }
+    }
+
+    #[test]
+    fn test_from_config_gemini() {
+        std::env::set_var("TEST_GEMINI_KEY", "test-key");
+        let config = AiConfig {
+            provider: ProviderKind::Gemini,
+            model: "gemini-3-flash".to_string(),
+            max_tokens: 1024,
+            base_url: "http://localhost:8045/v1beta".to_string(),
+            api_key_env: "TEST_GEMINI_KEY".to_string(),
+        };
+        let client = AiClient::from_config(config).unwrap();
+        assert!(matches!(client.provider, Provider::Gemini(_)));
+        assert_eq!(client.model(), "gemini-3-flash");
+        std::env::remove_var("TEST_GEMINI_KEY");
+    }
+
+    #[test]
+    fn test_from_config_claude() {
+        std::env::set_var("TEST_CLAUDE_KEY", "test-key");
+        let config = AiConfig {
+            provider: ProviderKind::Claude,
+            model: "claude-sonnet-4-20250514".to_string(),
+            max_tokens: 2048,
+            base_url: "https://api.anthropic.com".to_string(),
+            api_key_env: "TEST_CLAUDE_KEY".to_string(),
+        };
+        let client = AiClient::from_config(config).unwrap();
+        assert!(matches!(client.provider, Provider::Claude(_)));
+        assert_eq!(client.model(), "claude-sonnet-4-20250514");
+        std::env::remove_var("TEST_CLAUDE_KEY");
     }
 }

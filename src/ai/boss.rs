@@ -60,6 +60,50 @@ pub fn format_boss_prompt(context: &str, question: &str) -> String {
         .replace("{question}", question)
 }
 
+/// System prompt for the Boss AI when evaluating Stop hook decisions.
+pub const STOP_BOSS_PROMPT: &str = r#"You are evaluating whether a coding task is complete.
+
+## Original Task
+{task}
+
+## Claude's Final Message
+{final_message}
+
+## Available Context
+{context}
+
+## Decision Framework
+
+Respond COMPLETE when:
+- The task requirements have been met
+- Claude explicitly states completion with verification
+- No obvious remaining work is mentioned
+
+Respond INCOMPLETE when:
+- Task appears unfinished
+- Critical steps are missing
+- Claude mentions "next" or "will also" or similar continuations
+- Errors or failures are present
+
+## Response Format
+
+For complete tasks:
+{"decision": "ANSWER", "answer": "COMPLETE", "confidence": 0.95, "save_as_fact": false}
+
+For incomplete tasks:
+{"decision": "ANSWER", "answer": "INCOMPLETE: <reason>", "confidence": 0.9, "save_as_fact": false}
+
+Always respond with ONLY the JSON object."#;
+
+/// Format the stop boss prompt with task, final message, and context.
+#[must_use]
+pub fn format_stop_boss_prompt(task: &str, final_message: &str, context: &str) -> String {
+    STOP_BOSS_PROMPT
+        .replace("{task}", task)
+        .replace("{final_message}", final_message)
+        .replace("{context}", context)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -149,5 +193,24 @@ mod tests {
         assert!(BOSS_SYSTEM_PROMPT.contains("Worker Question"));
         assert!(BOSS_SYSTEM_PROMPT.contains("Decision Framework"));
         assert!(BOSS_SYSTEM_PROMPT.contains("Response Format"));
+    }
+
+    #[test]
+    fn test_stop_boss_prompt_contains_expected_sections() {
+        assert!(STOP_BOSS_PROMPT.contains("{task}"));
+        assert!(STOP_BOSS_PROMPT.contains("{final_message}"));
+        assert!(STOP_BOSS_PROMPT.contains("{context}"));
+        assert!(STOP_BOSS_PROMPT.contains("COMPLETE"));
+        assert!(STOP_BOSS_PROMPT.contains("INCOMPLETE"));
+    }
+
+    #[test]
+    fn test_format_stop_boss_prompt() {
+        let prompt = format_stop_boss_prompt("Fix auth bug", "Done fixing", "Memory: uses JWT");
+        assert!(prompt.contains("Fix auth bug"));
+        assert!(prompt.contains("Done fixing"));
+        assert!(prompt.contains("Memory: uses JWT"));
+        assert!(!prompt.contains("{task}"));
+        assert!(!prompt.contains("{final_message}"));
     }
 }

@@ -559,17 +559,22 @@ mod tests {
     }
 
     #[test]
-    fn test_from_env_missing_key() {
-        // Temporarily unset the env var
-        let original = std::env::var("GEMINI_API_KEY").ok();
-        std::env::remove_var("GEMINI_API_KEY");
+    fn test_from_config_missing_key() {
+        // Use a unique env var name that definitely doesn't exist
+        // This avoids manipulating real env vars like GEMINI_API_KEY
+        let config = AiConfig {
+            provider: ProviderKind::Gemini,
+            model: "gemini-test".to_string(),
+            max_tokens: 1024,
+            base_url: "http://localhost:8045/v1beta".to_string(),
+            api_key_env: "NONEXISTENT_TEST_KEY_12345".to_string(),
+        };
 
-        let result = AiClient::from_env();
+        let result = AiClient::from_config(config);
         assert!(matches!(result, Err(AiError::MissingApiKey(_))));
 
-        // Restore if it was set
-        if let Some(key) = original {
-            std::env::set_var("GEMINI_API_KEY", key);
+        if let Err(AiError::MissingApiKey(env_name)) = result {
+            assert_eq!(env_name, "NONEXISTENT_TEST_KEY_12345");
         }
     }
 

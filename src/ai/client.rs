@@ -20,6 +20,9 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// Maximum number of retries for transient failures.
 const MAX_RETRIES: u32 = 3;
 
+/// Default Anthropic API version header value.
+const DEFAULT_ANTHROPIC_VERSION: &str = "2023-06-01";
+
 /// Build an HTTP client with proper timeout configuration.
 fn build_http_client() -> Client {
     Client::builder()
@@ -218,7 +221,7 @@ impl ClaudeProvider {
                 .client
                 .post(&url)
                 .header("x-api-key", &self.api_key)
-                .header("anthropic-version", "2023-06-01")
+                .header("anthropic-version", DEFAULT_ANTHROPIC_VERSION)
                 .header("Content-Type", "application/json")
                 .json(&body)
                 .send()

@@ -1,6 +1,19 @@
 //! Claude API client wrapper for supervisor decisions.
 
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
+
+/// Decision from the AI supervisor.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "decision", rename_all = "UPPERCASE")]
+pub enum SupervisorDecision {
+    /// Allow the tool call to proceed.
+    Allow { reason: String },
+    /// Deny the tool call.
+    Deny { reason: String },
+    /// Allow with corrective guidance.
+    Guide { reason: String, guidance: String },
+}
 
 /// Errors from AI client operations.
 #[derive(Error, Debug)]
@@ -63,5 +76,32 @@ impl AiClient {
         }
         tracing::warn!("AI supervisor not implemented, defaulting to allow");
         Ok(true)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_allow_decision() {
+        let json = r#"{"decision": "ALLOW", "reason": "Safe operation"}"#;
+        let decision: SupervisorDecision = serde_json::from_str(json).unwrap();
+        assert!(matches!(decision, SupervisorDecision::Allow { .. }));
+    }
+
+    #[test]
+    fn test_parse_deny_decision() {
+        let json = r#"{"decision": "DENY", "reason": "Risky operation"}"#;
+        let decision: SupervisorDecision = serde_json::from_str(json).unwrap();
+        assert!(matches!(decision, SupervisorDecision::Deny { .. }));
+    }
+
+    #[test]
+    fn test_parse_guide_decision() {
+        let json =
+            r#"{"decision": "GUIDE", "reason": "Needs adjustment", "guidance": "Use safer path"}"#;
+        let decision: SupervisorDecision = serde_json::from_str(json).unwrap();
+        assert!(matches!(decision, SupervisorDecision::Guide { .. }));
     }
 }

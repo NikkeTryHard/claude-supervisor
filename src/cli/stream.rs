@@ -36,6 +36,16 @@ pub enum StreamError {
     ChannelClosed,
 }
 
+impl StreamError {
+    /// Create a parse error with input and reason.
+    pub fn parse_error(input: impl Into<String>, reason: impl Into<String>) -> Self {
+        Self::ParseError {
+            input: input.into(),
+            reason: reason.into(),
+        }
+    }
+}
+
 /// Parser for Claude Code stream-json output.
 pub struct StreamParser;
 

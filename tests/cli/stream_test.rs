@@ -13,7 +13,7 @@ fn parse_line_valid_json() {
 
 #[test]
 fn parse_line_tool_use() {
-    let line = r#"{"type":"tool_use","tool_use_id":"123","name":"Read","input":{}}"#;
+    let line = r#"{"type":"tool_use","id":"123","name":"Read","input":{}}"#;
     let result = StreamParser::parse_line(line);
 
     assert!(result.is_ok());

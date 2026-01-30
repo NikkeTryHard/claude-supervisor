@@ -90,6 +90,12 @@ impl ClaudeProcessBuilder {
         self
     }
 
+    /// Get the prompt.
+    #[must_use]
+    pub fn prompt(&self) -> &str {
+        &self.prompt
+    }
+
     /// Build the command-line arguments.
     #[must_use]
     pub fn build_args(&self) -> Vec<String> {

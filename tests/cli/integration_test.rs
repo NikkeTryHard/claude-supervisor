@@ -12,15 +12,17 @@ fn all_event_types_exported() {
     assert!(matches!(event, ClaudeEvent::MessageStop));
 
     let init = SystemInit {
-        subtype: "init".to_string(),
-        session_id: "test".to_string(),
         cwd: "/tmp".to_string(),
         tools: vec![],
+        model: "claude-sonnet-4-20250514".to_string(),
+        session_id: "test".to_string(),
+        mcp_servers: vec![],
+        subtype: Some("init".to_string()),
     };
-    assert_eq!(init.subtype, "init");
+    assert_eq!(init.subtype, Some("init".to_string()));
 
     let tool_use = ToolUse {
-        tool_use_id: "id".to_string(),
+        id: "id".to_string(),
         name: "Read".to_string(),
         input: serde_json::json!({}),
     };
@@ -29,6 +31,7 @@ fn all_event_types_exported() {
     let tool_result = ToolResult {
         tool_use_id: "id".to_string(),
         content: "output".to_string(),
+        is_error: false,
     };
     assert_eq!(tool_result.content, "output");
 
@@ -38,15 +41,13 @@ fn all_event_types_exported() {
     assert!(matches!(delta, ContentDelta::TextDelta { .. }));
 
     let result = ResultEvent {
-        subtype: "success".to_string(),
+        result: "done".to_string(),
         session_id: "test".to_string(),
-        cost_usd: 0.0,
         is_error: false,
-        duration_ms: 0,
-        duration_api_ms: 0,
-        num_turns: 0,
+        cost_usd: None,
+        duration_ms: None,
     };
-    assert_eq!(result.subtype, "success");
+    assert_eq!(result.result, "done");
 }
 
 #[test]
@@ -63,7 +64,7 @@ fn builder_is_clonable() {
 #[test]
 fn events_are_serializable() {
     let event = ClaudeEvent::ToolUse(ToolUse {
-        tool_use_id: "123".to_string(),
+        id: "123".to_string(),
         name: "Bash".to_string(),
         input: serde_json::json!({"command": "ls -la"}),
     });
@@ -82,20 +83,18 @@ fn events_are_serializable() {
 fn helper_methods_work() {
     // is_terminal
     let result_event = ClaudeEvent::Result(ResultEvent {
-        subtype: "success".to_string(),
+        result: "done".to_string(),
         session_id: "abc".to_string(),
-        cost_usd: 0.05,
         is_error: false,
-        duration_ms: 1000,
-        duration_api_ms: 800,
-        num_turns: 5,
+        cost_usd: Some(0.05),
+        duration_ms: Some(1000),
     });
     assert!(result_event.is_terminal());
-    assert!(!ClaudeEvent::MessageStop.is_terminal());
+    assert!(ClaudeEvent::MessageStop.is_terminal());
 
     // tool_name
     let tool_event = ClaudeEvent::ToolUse(ToolUse {
-        tool_use_id: "id".to_string(),
+        id: "id".to_string(),
         name: "Edit".to_string(),
         input: serde_json::json!({}),
     });
@@ -104,10 +103,12 @@ fn helper_methods_work() {
 
     // session_id
     let system_event = ClaudeEvent::System(SystemInit {
-        subtype: "init".to_string(),
-        session_id: "session_123".to_string(),
         cwd: "/home/user".to_string(),
         tools: vec!["Read".to_string()],
+        model: "claude-sonnet-4-20250514".to_string(),
+        session_id: "session_123".to_string(),
+        mcp_servers: vec![],
+        subtype: Some("init".to_string()),
     });
     assert_eq!(system_event.session_id(), Some("session_123"));
     assert_eq!(result_event.session_id(), Some("abc"));

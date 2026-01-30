@@ -4,15 +4,17 @@ use claude_supervisor::cli::{ClaudeEvent, ContentDelta, ResultEvent, SystemInit,
 
 #[test]
 fn parse_system_init_event() {
-    let json = r#"{"type":"system","subtype":"init","session_id":"abc123","cwd":"/home/user/project","tools":["Read","Write","Bash"]}"#;
+    let json = r#"{"type":"system","subtype":"init","session_id":"abc123","cwd":"/home/user/project","tools":["Read","Write","Bash"],"model":"claude-sonnet-4-20250514","mcp_servers":[]}"#;
     let event: ClaudeEvent = serde_json::from_str(json).unwrap();
 
     match event {
         ClaudeEvent::System(init) => {
-            assert_eq!(init.subtype, "init");
+            assert_eq!(init.subtype, Some("init".to_string()));
             assert_eq!(init.session_id, "abc123");
             assert_eq!(init.cwd, "/home/user/project");
             assert_eq!(init.tools, vec!["Read", "Write", "Bash"]);
+            assert_eq!(init.model, "claude-sonnet-4-20250514");
+            assert!(init.mcp_servers.is_empty());
         }
         _ => panic!("Expected System event, got {event:?}"),
     }
@@ -34,12 +36,12 @@ fn parse_assistant_event() {
 
 #[test]
 fn parse_tool_use_event() {
-    let json = r#"{"type":"tool_use","tool_use_id":"tool_123","name":"Read","input":{"file_path":"/tmp/test.txt"}}"#;
+    let json = r#"{"type":"tool_use","id":"tool_123","name":"Read","input":{"file_path":"/tmp/test.txt"}}"#;
     let event: ClaudeEvent = serde_json::from_str(json).unwrap();
 
     match event {
         ClaudeEvent::ToolUse(tool_use) => {
-            assert_eq!(tool_use.tool_use_id, "tool_123");
+            assert_eq!(tool_use.id, "tool_123");
             assert_eq!(tool_use.name, "Read");
             assert_eq!(tool_use.input["file_path"], "/tmp/test.txt");
         }
@@ -49,13 +51,14 @@ fn parse_tool_use_event() {
 
 #[test]
 fn parse_tool_result_event() {
-    let json = r#"{"type":"tool_result","tool_use_id":"tool_123","content":"file contents here"}"#;
+    let json = r#"{"type":"tool_result","tool_use_id":"tool_123","content":"file contents here","is_error":false}"#;
     let event: ClaudeEvent = serde_json::from_str(json).unwrap();
 
     match event {
         ClaudeEvent::ToolResult(result) => {
             assert_eq!(result.tool_use_id, "tool_123");
             assert_eq!(result.content, "file contents here");
+            assert!(!result.is_error);
         }
         _ => panic!("Expected ToolResult event, got {event:?}"),
     }
@@ -152,18 +155,16 @@ fn parse_message_stop() {
 
 #[test]
 fn parse_result_event() {
-    let json = r#"{"type":"result","subtype":"success","session_id":"abc123","cost_usd":0.05,"is_error":false,"duration_ms":1500,"duration_api_ms":1200,"num_turns":3}"#;
+    let json = r#"{"type":"result","result":"Task completed successfully","session_id":"abc123","cost_usd":0.05,"is_error":false,"duration_ms":1500}"#;
     let event: ClaudeEvent = serde_json::from_str(json).unwrap();
 
     match event {
         ClaudeEvent::Result(result) => {
-            assert_eq!(result.subtype, "success");
+            assert_eq!(result.result, "Task completed successfully");
             assert_eq!(result.session_id, "abc123");
-            assert!((result.cost_usd - 0.05).abs() < f64::EPSILON);
+            assert!((result.cost_usd.unwrap() - 0.05).abs() < f64::EPSILON);
             assert!(!result.is_error);
-            assert_eq!(result.duration_ms, 1500);
-            assert_eq!(result.duration_api_ms, 1200);
-            assert_eq!(result.num_turns, 3);
+            assert_eq!(result.duration_ms, Some(1500));
         }
         _ => panic!("Expected Result event, got {event:?}"),
     }
@@ -196,22 +197,23 @@ fn parse_error_missing_type() {
 #[test]
 fn is_terminal_for_result() {
     let result = ClaudeEvent::Result(ResultEvent {
-        subtype: "success".to_string(),
+        result: "done".to_string(),
         session_id: "abc".to_string(),
-        cost_usd: 0.0,
+        cost_usd: None,
         is_error: false,
-        duration_ms: 0,
-        duration_api_ms: 0,
-        num_turns: 0,
+        duration_ms: None,
     });
     assert!(result.is_terminal());
 }
 
 #[test]
-fn is_terminal_for_non_terminal() {
+fn is_terminal_for_message_stop() {
     let event = ClaudeEvent::MessageStop;
-    assert!(!event.is_terminal());
+    assert!(event.is_terminal());
+}
 
+#[test]
+fn is_terminal_for_non_terminal() {
     let event = ClaudeEvent::Assistant {
         message: serde_json::json!({}),
     };
@@ -221,7 +223,7 @@ fn is_terminal_for_non_terminal() {
 #[test]
 fn tool_name_for_tool_use() {
     let event = ClaudeEvent::ToolUse(ToolUse {
-        tool_use_id: "id".to_string(),
+        id: "id".to_string(),
         name: "Read".to_string(),
         input: serde_json::json!({}),
     });
@@ -237,10 +239,12 @@ fn tool_name_for_non_tool_event() {
 #[test]
 fn session_id_for_system_init() {
     let event = ClaudeEvent::System(SystemInit {
-        subtype: "init".to_string(),
-        session_id: "session_abc".to_string(),
         cwd: "/tmp".to_string(),
         tools: vec![],
+        model: "claude-sonnet-4-20250514".to_string(),
+        session_id: "session_abc".to_string(),
+        mcp_servers: vec![],
+        subtype: Some("init".to_string()),
     });
     assert_eq!(event.session_id(), Some("session_abc"));
 }
@@ -248,13 +252,11 @@ fn session_id_for_system_init() {
 #[test]
 fn session_id_for_result() {
     let event = ClaudeEvent::Result(ResultEvent {
-        subtype: "success".to_string(),
+        result: "done".to_string(),
         session_id: "session_xyz".to_string(),
-        cost_usd: 0.0,
         is_error: false,
-        duration_ms: 0,
-        duration_api_ms: 0,
-        num_turns: 0,
+        cost_usd: None,
+        duration_ms: None,
     });
     assert_eq!(event.session_id(), Some("session_xyz"));
 }
@@ -270,7 +272,7 @@ fn session_id_for_other_events() {
 #[test]
 fn serialize_and_deserialize_tool_use() {
     let original = ClaudeEvent::ToolUse(ToolUse {
-        tool_use_id: "tool_456".to_string(),
+        id: "tool_456".to_string(),
         name: "Write".to_string(),
         input: serde_json::json!({"file_path": "/tmp/out.txt", "content": "hello"}),
     });

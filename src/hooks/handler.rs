@@ -294,10 +294,14 @@ impl HookHandler {
     }
 
     /// Attempt to escalate a Stop event to the supervisor via IPC.
+    ///
+    /// The `transcript_path` parameter allows the supervisor to read the full
+    /// conversation context and final message directly from the transcript file.
     pub async fn try_escalate_stop(
         &self,
         session_id: &str,
         final_message: &str,
+        transcript_path: Option<&str>,
         task: Option<&str>,
         iteration: u32,
     ) -> Option<crate::ipc::StopEscalationResponse> {
@@ -311,6 +315,7 @@ impl HookHandler {
         let request = crate::ipc::StopEscalationRequest {
             session_id: session_id.to_string(),
             final_message: final_message.to_string(),
+            transcript_path: transcript_path.map(String::from),
             task: task.map(String::from),
             iteration,
         };
@@ -384,9 +389,16 @@ impl HookHandler {
 
         // Try escalation to supervisor if available
         if self.ipc_client.is_some() {
+            // Pass empty final_message - supervisor reads the transcript for actual content
             let final_message = "";
             if let Some(escalation_response) = self
-                .try_escalate_stop(&input.session_id, final_message, task, iteration)
+                .try_escalate_stop(
+                    &input.session_id,
+                    final_message,
+                    input.transcript_path.as_deref(),
+                    task,
+                    iteration,
+                )
                 .await
             {
                 let response = match escalation_response {
@@ -668,7 +680,13 @@ mod tests {
     async fn test_try_escalate_stop_no_client() {
         let handler = create_handler(PolicyLevel::Permissive);
         let result = handler
-            .try_escalate_stop("session-1", "Task done", Some("Fix bug"), 1)
+            .try_escalate_stop(
+                "session-1",
+                "Task done",
+                Some("/path/to/transcript.jsonl"),
+                Some("Fix bug"),
+                1,
+            )
             .await;
         assert!(result.is_none());
     }
@@ -678,7 +696,13 @@ mod tests {
         let client = IpcClient::with_path("/nonexistent/socket.sock");
         let handler = create_handler(PolicyLevel::Permissive).with_ipc_client(client);
         let result = handler
-            .try_escalate_stop("session-1", "Task done", Some("Fix bug"), 1)
+            .try_escalate_stop(
+                "session-1",
+                "Task done",
+                Some("/path/to/transcript.jsonl"),
+                Some("Fix bug"),
+                1,
+            )
             .await;
         assert!(result.is_none());
     }

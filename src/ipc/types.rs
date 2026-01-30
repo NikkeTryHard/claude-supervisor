@@ -48,7 +48,12 @@ pub struct StopEscalationRequest {
     /// Session ID from Claude Code.
     pub session_id: String,
     /// The final message/summary from Claude before stopping.
+    /// Note: This may be empty - the supervisor should read the transcript
+    /// for the actual final message when `transcript_path` is provided.
     pub final_message: String,
+    /// Path to the conversation transcript file.
+    /// The supervisor uses this to read the full context and final message.
+    pub transcript_path: Option<String>,
     /// The original task being worked on.
     pub task: Option<String>,
     /// Current iteration count for this session.
@@ -176,6 +181,7 @@ mod tests {
         let request = StopEscalationRequest {
             session_id: "session-123".to_string(),
             final_message: "I've completed the task".to_string(),
+            transcript_path: Some("/home/user/.claude/projects/abc/conversation.jsonl".to_string()),
             task: Some("Fix the auth bug".to_string()),
             iteration: 3,
         };

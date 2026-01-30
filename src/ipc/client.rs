@@ -236,6 +236,7 @@ mod tests {
         let request = crate::ipc::StopEscalationRequest {
             session_id: "test".to_string(),
             final_message: "Done".to_string(),
+            transcript_path: Some("/path/to/transcript.jsonl".to_string()),
             task: Some("Test task".to_string()),
             iteration: 1,
         };

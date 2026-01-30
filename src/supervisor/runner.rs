@@ -14,7 +14,7 @@ use crate::cli::{
     ClaudeEvent, ClaudeProcess, ResultEvent, StreamParser, ToolUse, DEFAULT_CHANNEL_BUFFER,
 };
 use crate::knowledge::{
-    ClaudeMdSource, KnowledgeAggregator, KnowledgeSource, SessionHistorySource,
+    ClaudeMdSource, KnowledgeAggregator, KnowledgeSource, MemorySource, SessionHistorySource,
 };
 use crate::supervisor::{
     PolicyDecision, PolicyEngine, SessionState, SessionStateMachine, SessionStats,
@@ -256,6 +256,13 @@ impl Supervisor {
                 "Loaded session history knowledge source"
             );
             aggregator.add_source(Box::new(history));
+        }
+
+        // Load memory file
+        let memory = MemorySource::load(project_dir).await;
+        if memory.context_summary().is_some() {
+            tracing::info!(facts = memory.len(), "Loaded memory knowledge source");
+            aggregator.add_source(Box::new(memory));
         }
 
         if aggregator.has_knowledge() {

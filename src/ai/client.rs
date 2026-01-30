@@ -2,6 +2,7 @@
 
 use clust::messages::{ClaudeModel, MaxTokens, Message, MessagesRequestBody, SystemPrompt};
 use clust::{ApiKey, Client};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -156,17 +157,18 @@ impl AiClient {
     }
 }
 
-/// Extract a `SupervisorDecision` from the AI response text.
+/// Extract a JSON object from AI response text.
 ///
-/// Looks for JSON in the response and parses it.
-fn extract_decision(text: &str) -> Result<SupervisorDecision, AiError> {
-    // Try to find JSON in the response
-    // Look for patterns like {"decision": ...}
+/// Looks for JSON in the response and parses it into the specified type.
+///
+/// # Errors
+///
+/// Returns `AiError::ParseError` if no JSON object is found or parsing fails.
+pub fn extract_json<T: DeserializeOwned>(text: &str) -> Result<T, AiError> {
     let json_start = text
         .find('{')
         .ok_or_else(|| AiError::ParseError(format!("No JSON object found in response: {text}")))?;
 
-    // Find the matching closing brace
     let mut depth = 0;
     let mut json_end = json_start;
     for (i, c) in text[json_start..].char_indices() {
@@ -185,7 +187,14 @@ fn extract_decision(text: &str) -> Result<SupervisorDecision, AiError> {
 
     let json_str = &text[json_start..json_end];
     serde_json::from_str(json_str)
-        .map_err(|e| AiError::ParseError(format!("Failed to parse decision JSON: {e}")))
+        .map_err(|e| AiError::ParseError(format!("Failed to parse JSON: {e}")))
+}
+
+/// Extract a `SupervisorDecision` from the AI response text.
+///
+/// Looks for JSON in the response and parses it.
+fn extract_decision(text: &str) -> Result<SupervisorDecision, AiError> {
+    extract_json(text)
 }
 
 #[cfg(test)]

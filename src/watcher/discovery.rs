@@ -14,6 +14,7 @@ use super::error::WatcherError;
 /// # Examples
 ///
 /// ```
+/// use std::path::Path;
 /// use claude_supervisor::watcher::project_path_hash;
 ///
 /// let hash = project_path_hash(Path::new("/home/user/project"));

@@ -17,11 +17,10 @@ Build a supervisor layer that:
 flowchart TB
     subgraph supervisor["Rust Supervisor"]
         policy["Policy Engine"]
-        ai["AI Client"]
-        clust["clust"]
+        ai["AI Client<br/>(reqwest)"]
         router["Event Router<br/>(mpsc channel)"]
 
-        clust --> ai --> policy
+        ai --> policy
         policy --> router
     end
 
@@ -109,7 +108,7 @@ tracing::warn!(tool = %name, reason = %reason, "Tool call denied");
 | `src/supervisor/policy.rs` | Policy engine |
 | `src/supervisor/state.rs` | Session state machine |
 | `src/hooks/pre_tool_use.rs` | PreToolUse hook handler |
-| `src/ai/client.rs` | clust API wrapper |
+| `src/ai/client.rs` | Multi-provider AI client (Claude/Gemini) |
 | `src/ai/prompts.rs` | Supervisor system prompts |
 
 ## Resources
@@ -124,7 +123,7 @@ tracing::warn!(tool = %name, reason = %reason, "Tool call denied");
 
 | Crate | Docs | Purpose |
 |-------|------|---------|
-| `clust` | [docs.rs/clust](https://docs.rs/clust/0.9.0/clust/) | Claude API client |
+| `reqwest` | [docs.rs/reqwest](https://docs.rs/reqwest/latest/reqwest/) | HTTP client |
 | `tokio` | [docs.rs/tokio](https://docs.rs/tokio/latest/tokio/) | Async runtime |
 | `serde` | [docs.rs/serde](https://docs.rs/serde/latest/serde/) | Serialization |
 | `clap` | [docs.rs/clap](https://docs.rs/clap/latest/clap/) | CLI parsing |
@@ -214,18 +213,6 @@ cargo t              # Run all tests (alias for cargo nextest run)
 cargo t -- --no-capture  # With output
 cargo ta             # All features
 ```
-
-## Phases
-
-See `roadmap.md` for detailed implementation plan.
-
-| Phase | Status | Description |
-|-------|--------|-------------|
-| 1 | In Progress | Minimal viable supervisor |
-| 2 | Planned | Hook integration |
-| 3 | Planned | AI supervisor |
-| 4 | Planned | Conversation awareness |
-| 5 | Planned | Advanced features |
 
 ## Issues
 

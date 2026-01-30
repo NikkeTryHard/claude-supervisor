@@ -61,6 +61,8 @@ impl AuditLog {
                     path: path_clone,
                     source,
                 })?;
+            // Enable WAL mode separately before schema batch for better reliability
+            conn.pragma_update(None, "journal_mode", "WAL")?;
             conn.execute_batch(SCHEMA)?;
             Ok(conn)
         })
@@ -99,6 +101,23 @@ impl AuditLog {
         self.path.as_deref()
     }
 
+    /// Run a blocking database operation in a separate thread.
+    ///
+    /// This is a helper to reduce boilerplate for `spawn_blocking` patterns.
+    async fn run_blocking<T, F>(&self, f: F) -> Result<T, AuditError>
+    where
+        T: Send + 'static,
+        F: FnOnce(&Connection) -> Result<T, AuditError> + Send + 'static,
+    {
+        let conn = self.conn.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = conn.blocking_lock();
+            f(&conn)
+        })
+        .await
+        .map_err(|_| AuditError::TaskCancelled)?
+    }
+
     /// Log a session start.
     ///
     /// # Errors
@@ -109,9 +128,7 @@ impl AuditLog {
         let started_at = session.started_at.to_rfc3339();
         let task = session.task.clone();
 
-        let conn = self.conn.clone();
-        tokio::task::spawn_blocking(move || -> Result<(), AuditError> {
-            let conn = conn.blocking_lock();
+        self.run_blocking(move |conn| {
             conn.execute(
                 "INSERT INTO sessions (id, started_at, task) VALUES (?1, ?2, ?3)",
                 params![id, started_at, task],
@@ -119,7 +136,6 @@ impl AuditLog {
             Ok(())
         })
         .await
-        .map_err(|_| AuditError::TaskCancelled)?
     }
 
     /// Log a session end with result.
@@ -136,9 +152,7 @@ impl AuditLog {
         let ended_at = chrono::Utc::now().to_rfc3339();
         let result = result.into();
 
-        let conn = self.conn.clone();
-        tokio::task::spawn_blocking(move || -> Result<(), AuditError> {
-            let conn = conn.blocking_lock();
+        self.run_blocking(move |conn| {
             conn.execute(
                 "UPDATE sessions SET ended_at = ?1, result = ?2 WHERE id = ?3",
                 params![ended_at, result, id],
@@ -146,7 +160,6 @@ impl AuditLog {
             Ok(())
         })
         .await
-        .map_err(|_| AuditError::TaskCancelled)?
     }
 
     /// Log an audit event.
@@ -168,9 +181,7 @@ impl AuditLog {
         let decision = event.decision.map(|d| d.as_str().to_string());
         let reason = event.reason.clone();
 
-        let conn = self.conn.clone();
-        tokio::task::spawn_blocking(move || -> Result<(), AuditError> {
-            let conn = conn.blocking_lock();
+        self.run_blocking(move |conn| {
             conn.execute(
                 "INSERT INTO events (id, session_id, timestamp, event_type, tool_name, tool_input, decision, reason)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
@@ -179,7 +190,6 @@ impl AuditLog {
             Ok(())
         })
         .await
-        .map_err(|_| AuditError::TaskCancelled)?
     }
 
     /// Log or update session metrics.
@@ -198,9 +208,7 @@ impl AuditLog {
         let estimated_cost_cents = metrics.estimated_cost_cents;
         let updated_at = chrono::Utc::now().to_rfc3339();
 
-        let conn = self.conn.clone();
-        tokio::task::spawn_blocking(move || -> Result<(), AuditError> {
-            let conn = conn.blocking_lock();
+        self.run_blocking(move |conn| {
             conn.execute(
                 "INSERT OR REPLACE INTO metrics (session_id, input_tokens, output_tokens, api_calls, cache_hits, estimated_cost_cents, updated_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -209,7 +217,6 @@ impl AuditLog {
             Ok(())
         })
         .await
-        .map_err(|_| AuditError::TaskCancelled)?
     }
 
     /// Get events for a session, ordered by timestamp descending.
@@ -224,9 +231,7 @@ impl AuditLog {
     ) -> Result<Vec<AuditEvent>, AuditError> {
         let session_id_str = session_id.to_string();
 
-        let conn = self.conn.clone();
-        tokio::task::spawn_blocking(move || -> Result<Vec<AuditEvent>, AuditError> {
-            let conn = conn.blocking_lock();
+        self.run_blocking(move |conn| {
             let mut stmt = conn.prepare(
                 "SELECT id, session_id, timestamp, event_type, tool_name, tool_input, decision, reason
                  FROM events WHERE session_id = ?1 ORDER BY timestamp DESC LIMIT ?2",
@@ -260,17 +265,32 @@ impl AuditLog {
             for (id, session_id, timestamp, event_type, tool_name, tool_input, decision, reason) in
                 events
             {
-                let id = Uuid::parse_str(&id).unwrap_or_else(|_| Uuid::nil());
-                let session_id = Uuid::parse_str(&session_id).unwrap_or_else(|_| Uuid::nil());
+                let id = Uuid::parse_str(&id).unwrap_or_else(|e| {
+                    tracing::warn!(id = %id, error = %e, "Failed to parse event UUID, using nil");
+                    Uuid::nil()
+                });
+                let session_id = Uuid::parse_str(&session_id).unwrap_or_else(|e| {
+                    tracing::warn!(session_id = %session_id, error = %e, "Failed to parse session UUID, using nil");
+                    Uuid::nil()
+                });
                 let timestamp = chrono::DateTime::parse_from_rfc3339(&timestamp)
-                    .map_or_else(|_| chrono::Utc::now(), |dt| dt.with_timezone(&chrono::Utc));
+                    .map_or_else(
+                        |e| {
+                            tracing::warn!(timestamp = %timestamp, error = %e, "Failed to parse timestamp, using now");
+                            chrono::Utc::now()
+                        },
+                        |dt| dt.with_timezone(&chrono::Utc),
+                    );
                 let event_type = match event_type.as_str() {
                     "session_start" => super::types::EventType::SessionStart,
                     "session_end" => super::types::EventType::SessionEnd,
                     "tool_use" => super::types::EventType::ToolUse,
                     "policy_decision" => super::types::EventType::PolicyDecision,
                     "ai_escalation" => super::types::EventType::AiEscalation,
-                    _ => super::types::EventType::Error,
+                    unknown => {
+                        tracing::warn!(event_type = %unknown, "Unknown event type in database, treating as Error");
+                        super::types::EventType::Error
+                    }
                 };
                 let tool_input = tool_input
                     .and_then(|s| serde_json::from_str(&s).ok());
@@ -296,7 +316,6 @@ impl AuditLog {
             Ok(result)
         })
         .await
-        .map_err(|_| AuditError::TaskCancelled)?
     }
 
     /// Get metrics for a session.
@@ -310,9 +329,7 @@ impl AuditLog {
     ) -> Result<Option<SessionMetrics>, AuditError> {
         let session_id_str = session_id.to_string();
 
-        let conn = self.conn.clone();
-        tokio::task::spawn_blocking(move || -> Result<Option<SessionMetrics>, AuditError> {
-            let conn = conn.blocking_lock();
+        self.run_blocking(move |conn| {
             let result = conn
                 .query_row(
                     "SELECT session_id, input_tokens, output_tokens, api_calls, cache_hits, estimated_cost_cents
@@ -345,7 +362,6 @@ impl AuditLog {
             ))
         })
         .await
-        .map_err(|_| AuditError::TaskCancelled)?
     }
 
     /// Count total events in the database.
@@ -354,14 +370,11 @@ impl AuditLog {
     ///
     /// Returns an error if the query fails.
     pub async fn count_events(&self) -> Result<u64, AuditError> {
-        let conn = self.conn.clone();
-        tokio::task::spawn_blocking(move || -> Result<u64, AuditError> {
-            let conn = conn.blocking_lock();
+        self.run_blocking(|conn| {
             let count: i64 = conn.query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))?;
             Ok(count.unsigned_abs())
         })
         .await
-        .map_err(|_| AuditError::TaskCancelled)?
     }
 
     /// Count events by decision type.
@@ -372,9 +385,7 @@ impl AuditLog {
     pub async fn count_by_decision(&self, decision: Decision) -> Result<u64, AuditError> {
         let decision_str = decision.as_str().to_string();
 
-        let conn = self.conn.clone();
-        tokio::task::spawn_blocking(move || -> Result<u64, AuditError> {
-            let conn = conn.blocking_lock();
+        self.run_blocking(move |conn| {
             let count: i64 = conn.query_row(
                 "SELECT COUNT(*) FROM events WHERE decision = ?1",
                 params![decision_str],
@@ -383,7 +394,6 @@ impl AuditLog {
             Ok(count.unsigned_abs())
         })
         .await
-        .map_err(|_| AuditError::TaskCancelled)?
     }
 }
 

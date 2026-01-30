@@ -5,8 +5,6 @@ pub const SCHEMA_VERSION: u32 = 1;
 
 /// SQL schema for the audit database.
 pub const SCHEMA: &str = r"
--- Enable WAL mode for better concurrent read/write performance
-PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
 
 -- Sessions table: tracks supervisor runs

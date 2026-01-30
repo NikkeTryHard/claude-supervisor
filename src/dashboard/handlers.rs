@@ -62,7 +62,10 @@ pub async fn get_events_sse(
                 let data = serde_json::to_string(&event).ok()?;
                 Some(Ok(Event::default().event(&event.event_type).data(data)))
             }
-            Err(_) => None, // Skip lagged messages
+            Err(e) => {
+                tracing::debug!(error = ?e, "SSE broadcast lagged, dropping message");
+                None
+            }
         }
     });
 

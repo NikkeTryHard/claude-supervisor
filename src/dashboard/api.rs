@@ -68,6 +68,14 @@ pub struct EventsQuery {
     pub offset: usize,
 }
 
+impl EventsQuery {
+    /// Get the effective limit, capped at `MAX_EVENTS_LIMIT`.
+    #[must_use]
+    pub fn effective_limit(&self) -> usize {
+        self.limit.min(MAX_EVENTS_LIMIT)
+    }
+}
+
 impl Default for EventsQuery {
     fn default() -> Self {
         Self {
@@ -76,6 +84,9 @@ impl Default for EventsQuery {
         }
     }
 }
+
+/// Maximum allowed limit for pagination.
+pub const MAX_EVENTS_LIMIT: usize = 1000;
 
 const fn default_limit() -> usize {
     100

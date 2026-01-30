@@ -93,6 +93,9 @@ pub struct DashboardHandles {
     pub cancel: CancellationToken,
 }
 
+/// Default capacity for the event broadcast channel.
+pub const DEFAULT_EVENT_CHANNEL_CAPACITY: usize = 256;
+
 /// Create paired channels for dashboard-supervisor communication.
 ///
 /// Returns a tuple of `(DashboardState, DashboardHandles)` that should be
@@ -101,7 +104,7 @@ pub struct DashboardHandles {
 pub fn create_dashboard_channels() -> (DashboardState, DashboardHandles) {
     let (status_tx, status_rx) = watch::channel(SupervisorStatus::default());
     let (command_tx, command_rx) = mpsc::channel(32);
-    let (event_tx, _) = broadcast::channel(256);
+    let (event_tx, _) = broadcast::channel(DEFAULT_EVENT_CHANNEL_CAPACITY);
     let cancel = CancellationToken::new();
 
     let dashboard_state = DashboardState {

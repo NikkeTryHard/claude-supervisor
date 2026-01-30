@@ -5,6 +5,7 @@ pub mod cli;
 pub mod commands;
 pub mod config;
 pub mod hooks;
+pub mod integration;
 pub mod ipc;
 pub mod knowledge;
 pub mod supervisor;

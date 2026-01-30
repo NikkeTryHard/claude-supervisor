@@ -99,7 +99,13 @@ impl Blocklist {
     pub fn with_default_rules() -> Self {
         let rules = Self::default_rules()
             .into_iter()
-            .filter_map(Result::ok)
+            .filter_map(|result| match result {
+                Ok(rule) => Some(rule),
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to compile default blocklist rule");
+                    None
+                }
+            })
             .collect();
         Self { rules }
     }

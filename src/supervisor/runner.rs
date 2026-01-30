@@ -7,7 +7,9 @@ use std::time::Duration;
 
 use tokio::sync::mpsc::Receiver;
 
-use crate::cli::{ClaudeEvent, ClaudeProcess, ToolUse};
+use crate::cli::{
+    ClaudeEvent, ClaudeProcess, ResultEvent, StreamParser, ToolUse, DEFAULT_CHANNEL_BUFFER,
+};
 use crate::supervisor::{
     PolicyDecision, PolicyEngine, SessionState, SessionStateMachine, SessionStats,
 };
@@ -48,6 +50,17 @@ pub enum SupervisorResult {
     ProcessExited,
 }
 
+impl SupervisorResult {
+    /// Create a Completed result from a `ResultEvent`.
+    #[must_use]
+    pub fn from_result_event(event: &ResultEvent) -> Self {
+        Self::Completed {
+            session_id: Some(event.session_id.clone()),
+            cost_usd: event.cost_usd,
+        }
+    }
+}
+
 /// Supervisor for orchestrating Claude Code execution with policy enforcement.
 pub struct Supervisor {
     process: Option<ClaudeProcess>,
@@ -86,6 +99,32 @@ impl Supervisor {
             state: SessionStateMachine::new(),
             session_id: None,
         }
+    }
+
+    /// Create a supervisor from a process, extracting stdout and setting up the event channel.
+    ///
+    /// This is a convenience constructor that:
+    /// 1. Takes ownership of the process's stdout
+    /// 2. Creates a stream parser channel from it
+    /// 3. Returns a fully configured supervisor
+    ///
+    /// # Errors
+    ///
+    /// Returns `SupervisorError::NoStdout` if the process stdout is not available.
+    pub fn from_process(
+        mut process: ClaudeProcess,
+        policy: PolicyEngine,
+    ) -> Result<Self, SupervisorError> {
+        let stdout = process.take_stdout().ok_or(SupervisorError::NoStdout)?;
+        let event_rx = StreamParser::into_channel(stdout, DEFAULT_CHANNEL_BUFFER);
+
+        Ok(Self {
+            process: Some(process),
+            policy,
+            event_rx,
+            state: SessionStateMachine::new(),
+            session_id: None,
+        })
     }
 
     /// Run the supervisor loop without an attached process.
@@ -182,10 +221,7 @@ impl Supervisor {
                     is_error = result.is_error,
                     "Session completed"
                 );
-                EventAction::Complete(SupervisorResult::Completed {
-                    session_id: Some(result.session_id.clone()),
-                    cost_usd: result.cost_usd,
-                })
+                EventAction::Complete(SupervisorResult::from_result_event(result))
             }
             ClaudeEvent::MessageStop => EventAction::Complete(SupervisorResult::Completed {
                 session_id: self.session_id.clone(),
@@ -212,11 +248,14 @@ impl Supervisor {
             }
             PolicyDecision::Escalate(reason) => {
                 self.state.transition(SessionState::WaitingForSupervisor);
-                tracing::info!(tool = %tool_use.name, reason = %reason, "Tool call escalated");
-                // For now, escalation continues (future: wait for approval)
-                self.state.record_approval();
-                self.state.transition(SessionState::Running);
-                EventAction::Continue
+                tracing::warn!(
+                    tool = %tool_use.name,
+                    id = %tool_use.id,
+                    %reason,
+                    "Tool call escalated - denying in Phase 1 (no AI supervisor)"
+                );
+                self.state.record_denial();
+                EventAction::Kill(format!("Escalation denied (no AI supervisor): {reason}"))
             }
         }
     }
@@ -399,9 +438,10 @@ mod tests {
         tx.send(tool_use).await.unwrap();
         drop(tx);
 
-        // Strict policy escalates unknown tools, but we continue for now
+        // Strict policy escalates unknown tools, which denies in Phase 1
         let result = supervisor.run_without_process().await.unwrap();
-        assert!(matches!(result, SupervisorResult::ProcessExited));
+        assert!(matches!(result, SupervisorResult::Killed { .. }));
+        assert_eq!(supervisor.stats().denials, 1);
     }
 
     #[tokio::test]

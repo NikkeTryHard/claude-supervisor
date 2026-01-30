@@ -188,7 +188,7 @@ async fn supervisor_handles_message_stop() {
 }
 
 #[tokio::test]
-async fn supervisor_strict_policy_escalates() {
+async fn supervisor_strict_policy_denies_escalation_in_phase1() {
     let (tx, rx) = mpsc::channel(32);
     let policy = PolicyEngine::new(PolicyLevel::Strict);
     let mut supervisor = Supervisor::new(policy, rx);
@@ -203,10 +203,16 @@ async fn supervisor_strict_policy_escalates() {
 
     drop(tx);
 
-    // Escalation currently continues (future: wait for approval)
+    // Escalation should deny in Phase 1 (no AI supervisor)
     let result = supervisor.run_without_process().await.unwrap();
-    assert!(matches!(result, SupervisorResult::ProcessExited));
-    assert_eq!(supervisor.stats().approvals, 1);
+    match result {
+        SupervisorResult::Killed { reason } => {
+            assert!(reason.contains("Escalation denied"));
+            assert!(reason.contains("no AI supervisor"));
+        }
+        _ => panic!("Expected Killed result for escalation in Phase 1"),
+    }
+    assert_eq!(supervisor.stats().denials, 1);
 }
 
 #[tokio::test]
@@ -219,4 +225,28 @@ async fn supervisor_channel_close_returns_process_exited() {
 
     let result = supervisor.run_without_process().await.unwrap();
     assert!(matches!(result, SupervisorResult::ProcessExited));
+}
+
+#[test]
+fn supervisor_result_from_result_event() {
+    let event = ResultEvent {
+        result: "Task completed".to_string(),
+        session_id: "session-789".to_string(),
+        is_error: false,
+        cost_usd: Some(0.10),
+        duration_ms: Some(2000),
+    };
+
+    let result = SupervisorResult::from_result_event(&event);
+
+    match result {
+        SupervisorResult::Completed {
+            session_id,
+            cost_usd,
+        } => {
+            assert_eq!(session_id, Some("session-789".to_string()));
+            assert_eq!(cost_usd, Some(0.10));
+        }
+        _ => panic!("Expected Completed result"),
+    }
 }

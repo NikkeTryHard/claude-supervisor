@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use tokio::sync::mpsc::Receiver;
 
+use crate::ai::{AiClient, AiError, SupervisorDecision};
 use crate::cli::{
     ClaudeEvent, ClaudeProcess, ResultEvent, StreamParser, ToolUse, DEFAULT_CHANNEL_BUFFER,
 };
@@ -68,6 +69,7 @@ pub struct Supervisor {
     event_rx: Receiver<ClaudeEvent>,
     state: SessionStateMachine,
     session_id: Option<String>,
+    ai_client: Option<AiClient>,
 }
 
 impl Supervisor {
@@ -82,6 +84,24 @@ impl Supervisor {
             event_rx,
             state: SessionStateMachine::new(),
             session_id: None,
+            ai_client: None,
+        }
+    }
+
+    /// Create a new supervisor with an AI client for escalation handling.
+    #[must_use]
+    pub fn with_ai_client(
+        policy: PolicyEngine,
+        event_rx: Receiver<ClaudeEvent>,
+        ai_client: AiClient,
+    ) -> Self {
+        Self {
+            process: None,
+            policy,
+            event_rx,
+            state: SessionStateMachine::new(),
+            session_id: None,
+            ai_client: Some(ai_client),
         }
     }
 
@@ -98,6 +118,25 @@ impl Supervisor {
             event_rx,
             state: SessionStateMachine::new(),
             session_id: None,
+            ai_client: None,
+        }
+    }
+
+    /// Create a supervisor with an attached process and AI client.
+    #[must_use]
+    pub fn with_process_and_ai(
+        process: ClaudeProcess,
+        policy: PolicyEngine,
+        event_rx: Receiver<ClaudeEvent>,
+        ai_client: AiClient,
+    ) -> Self {
+        Self {
+            process: Some(process),
+            policy,
+            event_rx,
+            state: SessionStateMachine::new(),
+            session_id: None,
+            ai_client: Some(ai_client),
         }
     }
 
@@ -124,7 +163,58 @@ impl Supervisor {
             event_rx,
             state: SessionStateMachine::new(),
             session_id: None,
+            ai_client: None,
         })
+    }
+
+    /// Create a supervisor from a process with an AI client.
+    ///
+    /// # Errors
+    ///
+    /// Returns `SupervisorError::NoStdout` if the process stdout is not available.
+    pub fn from_process_with_ai(
+        mut process: ClaudeProcess,
+        policy: PolicyEngine,
+        ai_client: AiClient,
+    ) -> Result<Self, SupervisorError> {
+        let stdout = process.take_stdout().ok_or(SupervisorError::NoStdout)?;
+        let event_rx = StreamParser::into_channel(stdout, DEFAULT_CHANNEL_BUFFER);
+
+        Ok(Self {
+            process: Some(process),
+            policy,
+            event_rx,
+            state: SessionStateMachine::new(),
+            session_id: None,
+            ai_client: Some(ai_client),
+        })
+    }
+
+    /// Check if AI supervision is available.
+    #[must_use]
+    pub fn has_ai_supervisor(&self) -> bool {
+        self.ai_client.is_some()
+    }
+
+    /// Ask the AI supervisor for a decision on an escalated tool call.
+    ///
+    /// Returns the decision or an error if the AI client is not available.
+    #[allow(dead_code)] // Will be used when escalation is wired into the event loop
+    async fn ask_ai_supervisor(
+        &self,
+        tool_use: &ToolUse,
+        reason: &str,
+    ) -> Result<SupervisorDecision, AiError> {
+        let ai_client = self.ai_client.as_ref().ok_or(AiError::MissingApiKey)?;
+
+        let context = format!(
+            "Escalation reason: {reason}\nSession: {}",
+            self.session_id.as_deref().unwrap_or("unknown")
+        );
+
+        ai_client
+            .ask_supervisor(&tool_use.name, &tool_use.input, &context)
+            .await
     }
 
     /// Run the supervisor loop without an attached process.

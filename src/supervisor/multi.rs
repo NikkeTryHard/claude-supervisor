@@ -302,4 +302,94 @@ impl MultiSessionSupervisor {
             tracing::info!(session_id = %id, "Session stop requested");
         }
     }
+
+    /// Wait for all sessions to complete and collect results.
+    ///
+    /// This consumes all pending session results and updates aggregated stats.
+    pub async fn wait_all(&mut self) -> Vec<SessionResult> {
+        let mut results = Vec::new();
+
+        while let Some(join_result) = self.join_set.join_next().await {
+            match join_result {
+                Ok(session_result) => {
+                    // Remove from active sessions
+                    self.sessions.remove(&session_result.id);
+
+                    // Update aggregated stats
+                    let success = session_result.result.is_ok();
+                    self.stats.add(&session_result.stats, success);
+
+                    tracing::info!(
+                        session_id = %session_result.id,
+                        task = %session_result.task,
+                        success = success,
+                        "Session completed"
+                    );
+
+                    results.push(session_result);
+                }
+                Err(join_error) => {
+                    tracing::error!(error = %join_error, "Session task panicked");
+                    self.stats.sessions_failed += 1;
+                }
+            }
+        }
+
+        results
+    }
+
+    /// Wait for the next session to complete.
+    ///
+    /// Returns `None` if no sessions are running.
+    pub async fn wait_next(&mut self) -> Option<SessionResult> {
+        let join_result = self.join_set.join_next().await?;
+
+        match join_result {
+            Ok(session_result) => {
+                self.sessions.remove(&session_result.id);
+                let success = session_result.result.is_ok();
+                self.stats.add(&session_result.stats, success);
+
+                tracing::info!(
+                    session_id = %session_result.id,
+                    task = %session_result.task,
+                    success = success,
+                    "Session completed"
+                );
+
+                Some(session_result)
+            }
+            Err(join_error) => {
+                tracing::error!(error = %join_error, "Session task panicked");
+                self.stats.sessions_failed += 1;
+                None
+            }
+        }
+    }
+
+    /// Spawn multiple sessions and wait for all to complete.
+    ///
+    /// # Arguments
+    ///
+    /// * `tasks` - List of task descriptions to execute.
+    ///
+    /// # Returns
+    ///
+    /// Results for all sessions.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if session spawning fails.
+    pub async fn spawn_and_wait_all(
+        &mut self,
+        tasks: Vec<String>,
+    ) -> Result<Vec<SessionResult>, MultiSessionError> {
+        // Spawn all tasks
+        for task in tasks {
+            self.spawn_session(task).await?;
+        }
+
+        // Wait for all to complete
+        Ok(self.wait_all().await)
+    }
 }

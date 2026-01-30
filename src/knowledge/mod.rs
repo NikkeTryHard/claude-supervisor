@@ -7,8 +7,10 @@
 
 mod claude_md;
 mod history;
+mod memory;
 mod source;
 
 pub use claude_md::*;
 pub use history::*;
+pub use memory::*;
 pub use source::*;

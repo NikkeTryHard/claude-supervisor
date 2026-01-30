@@ -132,11 +132,19 @@ impl ContextCompressor {
 }
 
 /// Truncate a string to a maximum length, adding ellipsis if needed.
+/// Uses char boundaries to ensure UTF-8 safety.
 fn truncate(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
         s.to_string()
     } else {
-        format!("{}...", &s[..max_len.saturating_sub(3)])
+        // Find the last valid char boundary where content + "..." fits in max_len
+        let target_len = max_len.saturating_sub(3);
+        let truncate_at = s
+            .char_indices()
+            .take_while(|(i, _)| *i < target_len)
+            .last()
+            .map_or(0, |(i, c)| i + c.len_utf8());
+        format!("{}...", &s[..truncate_at])
     }
 }
 
@@ -205,8 +213,31 @@ mod tests {
     fn test_truncate_long_content() {
         let long_string = "a".repeat(200);
         let truncated = truncate(&long_string, 50);
-        assert!(truncated.len() <= 50);
+        // With ASCII chars, truncation at max_len-3 + "..." = 47 + 3 = 50
+        assert_eq!(truncated.len(), 50);
         assert!(truncated.ends_with("..."));
+    }
+
+    #[test]
+    fn test_truncate_utf8_safety() {
+        // Test with multi-byte characters (emoji is 4 bytes, crab is U+1F980)
+        let text = "Hello 🦀 World";
+        let result = truncate(text, 10);
+        assert!(!result.is_empty());
+        // Should not panic and should be valid UTF-8
+        assert!(result.is_char_boundary(result.len()));
+
+        // Test truncating right at emoji boundary
+        let emoji_text = "🦀🦀🦀🦀🦀"; // 5 crabs, 20 bytes
+        let result = truncate(emoji_text, 10);
+        assert!(result.ends_with("..."));
+        // Verify we can iterate over chars (proves valid UTF-8)
+        assert!(result.chars().count() > 0);
+
+        // Test with mixed multi-byte chars
+        let mixed = "日本語テスト"; // Japanese text, 3 bytes per char
+        let result = truncate(mixed, 10);
+        assert!(result.is_char_boundary(result.len()));
     }
 
     #[test]

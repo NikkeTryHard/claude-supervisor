@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 
 use super::jsonl::{AssistantEntry, ContentBlock, JournalEntry, UserEntry};
+use super::pattern::{PatternDetector, StuckPattern};
 
 /// Record of a tool call with its result.
 #[derive(Debug, Clone)]
@@ -112,6 +113,15 @@ impl SessionReconstructor {
         self.entries_by_uuid.clear();
         self.tool_calls.clear();
         self.pending_tools.clear();
+    }
+
+    /// Detect stuck patterns in the tool call history.
+    ///
+    /// Uses the provided `PatternDetector` to analyze recent tool calls
+    /// for signs of repetitive or stuck behavior.
+    #[must_use]
+    pub fn detect_stuck_pattern(&self, detector: &PatternDetector) -> Option<StuckPattern> {
+        detector.detect(&self.tool_calls)
     }
 
     /// Extract UUID from any journal entry type.

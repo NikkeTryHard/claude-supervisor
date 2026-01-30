@@ -5,6 +5,7 @@
 mod discovery;
 mod error;
 mod jsonl;
+mod pattern;
 mod reconstructor;
 mod session_watcher;
 mod subagent;
@@ -16,6 +17,7 @@ pub use discovery::{
 };
 pub use error::WatcherError;
 pub use jsonl::*;
+pub use pattern::{PatternDetector, PatternThresholds, StuckPattern};
 pub use reconstructor::{SessionReconstructor, ToolCallRecord};
 pub use session_watcher::{SessionWatcher, WatcherEvent};
 pub use subagent::{SubagentRecord, SubagentStatus, SubagentTracker, DEFAULT_MAX_SUBAGENTS};

@@ -19,7 +19,7 @@ use super::jsonl::JournalEntry;
 use super::tailer::JsonlTailer;
 
 /// Events emitted by the session watcher.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum WatcherEvent {
     /// A new journal entry was parsed.
     NewEntry(Box<JournalEntry>),
@@ -30,7 +30,7 @@ pub enum WatcherEvent {
     /// A file was truncated (log rotation).
     FileTruncated(PathBuf),
     /// An error occurred during watching.
-    Error(String),
+    Error(WatcherError),
 }
 
 /// Watches a session JSONL file or directory for changes.
@@ -161,7 +161,7 @@ impl SessionWatcher {
             }
             Err(errors) => {
                 for error in errors {
-                    let _ = event_tx.send(WatcherEvent::Error(error.to_string()));
+                    let _ = event_tx.send(WatcherEvent::Error(WatcherError::Notify(error)));
                 }
             }
         }
@@ -209,7 +209,7 @@ impl SessionWatcher {
                             t.reset();
                         }
                         Err(e) => {
-                            let _ = event_tx.send(WatcherEvent::Error(e.to_string()));
+                            let _ = event_tx.send(WatcherEvent::Error(e));
                         }
                     }
                 }
@@ -362,7 +362,7 @@ mod tests {
         let truncated = WatcherEvent::FileTruncated(PathBuf::from("/tmp/test.jsonl"));
         assert!(matches!(truncated, WatcherEvent::FileTruncated(_)));
 
-        let error = WatcherEvent::Error("test error".to_string());
+        let error = WatcherEvent::Error(WatcherError::FileTruncated);
         assert!(matches!(error, WatcherEvent::Error(_)));
     }
 }

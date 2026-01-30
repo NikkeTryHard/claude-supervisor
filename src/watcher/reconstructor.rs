@@ -99,6 +99,21 @@ impl SessionReconstructor {
         self.entries_by_uuid.len()
     }
 
+    /// Get the most recent N tool calls.
+    #[must_use]
+    pub fn recent_tool_calls(&self, n: usize) -> Vec<&ToolCallRecord> {
+        let len = self.tool_calls.len();
+        let start = len.saturating_sub(n);
+        self.tool_calls[start..].iter().collect()
+    }
+
+    /// Clear all state, resetting the reconstructor.
+    pub fn clear(&mut self) {
+        self.entries_by_uuid.clear();
+        self.tool_calls.clear();
+        self.pending_tools.clear();
+    }
+
     /// Extract UUID from any journal entry type.
     fn extract_uuid(entry: &JournalEntry) -> Option<String> {
         match entry {

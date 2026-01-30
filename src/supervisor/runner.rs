@@ -330,7 +330,9 @@ impl Supervisor {
         tool_use: &ToolUse,
         reason: &str,
     ) -> Result<SupervisorDecision, AiError> {
-        let ai_client = self.ai_client.as_ref().ok_or(AiError::MissingApiKey)?;
+        let ai_client = self.ai_client.as_ref().ok_or(AiError::MissingApiKey(
+            "AI client not configured".to_string(),
+        ))?;
 
         // Build context using SupervisorContext builder
         let context = SupervisorContext::new()

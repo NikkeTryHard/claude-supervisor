@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::supervisor::PolicyLevel;
 
+use super::AiConfig;
+
 /// Policy configuration loaded from TOML file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -15,6 +17,8 @@ pub struct PolicyConfig {
     pub level: PolicyLevel,
     /// Auto-continue without user prompts.
     pub auto_continue: bool,
+    /// AI provider configuration.
+    pub ai: AiConfig,
     /// Bash command policies.
     pub bash: BashPolicy,
     /// File operation policies.
@@ -28,6 +32,7 @@ impl Default for PolicyConfig {
         Self {
             level: PolicyLevel::Permissive,
             auto_continue: false,
+            ai: AiConfig::default(),
             bash: BashPolicy::default(),
             files: FilesPolicy::default(),
             tools: ToolsPolicy::default(),

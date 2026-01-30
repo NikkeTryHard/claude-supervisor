@@ -1,0 +1,60 @@
+# Claude Supervisor Configuration Example
+#
+# Copy this file to .claude-supervisor.toml in your project root
+# or ~/.config/claude-supervisor/config.toml for global settings.
+
+# Global policy level: "permissive", "moderate", or "strict"
+level = "permissive"
+
+# Auto-continue without user prompts
+auto_continue = false
+
+# AI Provider Configuration
+[ai]
+# Provider: "gemini" (default) or "claude"
+provider = "gemini"
+
+# Model to use for supervision
+model = "gemini-3-flash"
+
+# Base URL for the API
+base_url = "http://127.0.0.1:8045/v1beta"
+
+# Environment variable containing the API key
+api_key_env = "GEMINI_API_KEY"
+
+# Maximum tokens in response
+max_tokens = 1024
+
+# For Claude provider, use:
+# provider = "claude"
+# model = "claude-sonnet-4-20250514"
+# base_url = "https://api.anthropic.com"
+# api_key_env = "ANTHROPIC_API_KEY"
+
+# Bash command policies
+[bash]
+block_destructive = true
+block_network_exfil = true
+block_privilege_escalation = true
+blocked_patterns = []
+
+# File operation policies
+[files]
+sensitive_paths = [
+    "/etc/passwd",
+    "/etc/shadow",
+    "/etc/sudoers",
+    ".ssh/",
+    ".aws/",
+    ".gnupg/",
+    ".env",
+]
+allow_env_files = false
+allow_ssh_dir = false
+
+# Tool-specific policies
+[tools]
+allowed = ["Read", "Glob", "Grep"]
+denied = []
+escalate = []

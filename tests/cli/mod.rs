@@ -2,3 +2,4 @@
 
 mod events_test;
 mod process_test;
+mod stream_test;

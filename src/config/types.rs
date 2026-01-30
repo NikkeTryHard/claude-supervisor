@@ -20,7 +20,7 @@ pub struct AiConfig {
 }
 
 fn default_model() -> String {
-    "claude-sonnet-4-20250514".to_string()
+    "claude-3-5-sonnet-20240620".to_string()
 }
 
 fn default_max_tokens() -> u32 {
@@ -76,7 +76,7 @@ mod tests {
     #[test]
     fn test_ai_config_defaults() {
         let config = AiConfig::default();
-        assert_eq!(config.model, "claude-sonnet-4-20250514");
+        assert_eq!(config.model, "claude-3-5-sonnet-20240620");
         assert_eq!(config.max_tokens, 1024);
     }
 

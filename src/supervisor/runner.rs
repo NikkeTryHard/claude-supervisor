@@ -199,7 +199,6 @@ impl Supervisor {
     /// Ask the AI supervisor for a decision on an escalated tool call.
     ///
     /// Returns the decision or an error if the AI client is not available.
-    #[allow(dead_code)] // Will be used when escalation is wired into the event loop
     async fn ask_ai_supervisor(
         &self,
         tool_use: &ToolUse,
@@ -215,6 +214,48 @@ impl Supervisor {
         ai_client
             .ask_supervisor(&tool_use.name, &tool_use.input, &context)
             .await
+    }
+
+    /// Handle an escalation by consulting the AI supervisor.
+    ///
+    /// Returns whether to allow or deny the tool call.
+    async fn handle_escalation(&self, tool_use: &ToolUse, reason: &str) -> EscalationResult {
+        match self.ask_ai_supervisor(tool_use, reason).await {
+            Ok(SupervisorDecision::Allow { reason }) => {
+                tracing::info!(
+                    tool = %tool_use.name,
+                    %reason,
+                    "AI supervisor allowed tool call"
+                );
+                EscalationResult::Allow
+            }
+            Ok(SupervisorDecision::Deny { reason }) => {
+                tracing::warn!(
+                    tool = %tool_use.name,
+                    %reason,
+                    "AI supervisor denied tool call"
+                );
+                EscalationResult::Deny(reason)
+            }
+            Ok(SupervisorDecision::Guide { reason, guidance }) => {
+                // For now, treat guidance as an allow with logged guidance
+                tracing::info!(
+                    tool = %tool_use.name,
+                    %reason,
+                    %guidance,
+                    "AI supervisor provided guidance - allowing"
+                );
+                EscalationResult::Allow
+            }
+            Err(e) => {
+                tracing::error!(
+                    tool = %tool_use.name,
+                    error = %e,
+                    "AI supervisor error - denying for safety"
+                );
+                EscalationResult::Deny(format!("AI supervisor error: {e}"))
+            }
+        }
     }
 
     /// Run the supervisor loop without an attached process.
@@ -240,6 +281,22 @@ impl Supervisor {
                     EventAction::Kill(reason) => {
                         self.state.transition(SessionState::Failed);
                         return Ok(SupervisorResult::Killed { reason });
+                    }
+                    EventAction::Escalate { tool_use, reason } => {
+                        // Handle AI supervisor escalation
+                        match self.handle_escalation(&tool_use, &reason).await {
+                            EscalationResult::Allow => {
+                                self.state.record_approval();
+                                self.state.transition(SessionState::Running);
+                            }
+                            EscalationResult::Deny(deny_reason) => {
+                                self.state.record_denial();
+                                self.state.transition(SessionState::Failed);
+                                return Ok(SupervisorResult::Killed {
+                                    reason: deny_reason,
+                                });
+                            }
+                        }
                     }
                 }
             } else {
@@ -273,6 +330,23 @@ impl Supervisor {
                         self.state.transition(SessionState::Failed);
                         self.terminate_process().await?;
                         return Ok(SupervisorResult::Killed { reason });
+                    }
+                    EventAction::Escalate { tool_use, reason } => {
+                        // Handle AI supervisor escalation
+                        match self.handle_escalation(&tool_use, &reason).await {
+                            EscalationResult::Allow => {
+                                self.state.record_approval();
+                                self.state.transition(SessionState::Running);
+                            }
+                            EscalationResult::Deny(deny_reason) => {
+                                self.state.record_denial();
+                                self.state.transition(SessionState::Failed);
+                                self.terminate_process().await?;
+                                return Ok(SupervisorResult::Killed {
+                                    reason: deny_reason,
+                                });
+                            }
+                        }
                     }
                 }
             } else {
@@ -345,14 +419,29 @@ impl Supervisor {
             }
             PolicyDecision::Escalate(reason) => {
                 self.state.transition(SessionState::WaitingForSupervisor);
-                tracing::warn!(
-                    tool = %tool_use.name,
-                    id = %tool_use.id,
-                    %reason,
-                    "Tool call escalated - denying in Phase 1 (no AI supervisor)"
-                );
-                self.state.record_denial();
-                EventAction::Kill(format!("Escalation denied (no AI supervisor): {reason}"))
+                // Check if AI supervisor is available for escalation
+                if self.ai_client.is_some() {
+                    tracing::info!(
+                        tool = %tool_use.name,
+                        id = %tool_use.id,
+                        %reason,
+                        "Tool call escalated to AI supervisor"
+                    );
+                    // Return a pending escalation action that will be handled asynchronously
+                    EventAction::Escalate {
+                        tool_use: tool_use.clone(),
+                        reason,
+                    }
+                } else {
+                    tracing::warn!(
+                        tool = %tool_use.name,
+                        id = %tool_use.id,
+                        %reason,
+                        "Tool call escalated but no AI supervisor available - denying"
+                    );
+                    self.state.record_denial();
+                    EventAction::Kill(format!("Escalation denied (no AI supervisor): {reason}"))
+                }
             }
         }
     }
@@ -386,6 +475,14 @@ impl Supervisor {
     }
 }
 
+/// Result of an AI supervisor escalation.
+enum EscalationResult {
+    /// Allow the tool call to proceed.
+    Allow,
+    /// Deny the tool call with a reason.
+    Deny(String),
+}
+
 /// Internal action type for event handling.
 enum EventAction {
     /// Continue processing events.
@@ -394,6 +491,8 @@ enum EventAction {
     Complete(SupervisorResult),
     /// Kill the process with a reason.
     Kill(String),
+    /// Escalate to AI supervisor for decision.
+    Escalate { tool_use: ToolUse, reason: String },
 }
 
 #[cfg(test)]

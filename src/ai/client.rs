@@ -9,6 +9,28 @@ use crate::config::AiConfig;
 
 use super::SUPERVISOR_SYSTEM_PROMPT;
 
+/// Parse a model string into a `ClaudeModel` enum variant.
+///
+/// Falls back to `ClaudeModel::Claude35Sonnet20240620` if the string doesn't match
+/// any known model.
+fn parse_model(model_str: &str) -> ClaudeModel {
+    match model_str {
+        "claude-3-opus-20240229" => ClaudeModel::Claude3Opus20240229,
+        "claude-3-sonnet-20240229" => ClaudeModel::Claude3Sonnet20240229,
+        "claude-3-haiku-20240307" => ClaudeModel::Claude3Haiku20240307,
+        "claude-3-5-sonnet-20240620" => ClaudeModel::Claude35Sonnet20240620,
+        // Default to Claude 3.5 Sonnet for any unrecognized model string
+        _ => {
+            tracing::warn!(
+                model = %model_str,
+                fallback = "claude-3-5-sonnet-20240620",
+                "Unrecognized model string, using fallback"
+            );
+            ClaudeModel::Claude35Sonnet20240620
+        }
+    }
+}
+
 /// Decision from the AI supervisor.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "decision", rename_all = "UPPERCASE")]
@@ -97,8 +119,8 @@ impl AiClient {
     ) -> Result<SupervisorDecision, AiError> {
         let client = Client::from_api_key(ApiKey::new(&self.api_key));
 
-        // Use Claude Sonnet as the model for supervisor decisions
-        let model = ClaudeModel::Claude3Sonnet20240229;
+        // Parse the configured model string into a ClaudeModel enum
+        let model = parse_model(&self.config.model);
 
         let max_tokens = MaxTokens::new(self.config.max_tokens, model)
             .map_err(|e| AiError::RequestFailed(format!("Invalid max_tokens: {e}")))?;

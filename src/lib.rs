@@ -9,3 +9,4 @@ pub mod ipc;
 pub mod knowledge;
 pub mod supervisor;
 pub mod watcher;
+pub mod worktree;

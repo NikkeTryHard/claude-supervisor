@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::supervisor::PolicyLevel;
 
-use super::StopConfig;
+use super::{StopConfig, WorktreeConfig};
 
 /// Configuration for the AI supervisor client.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,6 +51,8 @@ pub struct SupervisorConfig {
     pub ai_supervisor: bool,
     #[serde(default)]
     pub stop: StopConfig,
+    #[serde(default)]
+    pub worktree: WorktreeConfig,
 }
 
 impl Default for SupervisorConfig {
@@ -65,6 +67,7 @@ impl Default for SupervisorConfig {
             denied_tools: HashSet::new(),
             ai_supervisor: false,
             stop: StopConfig::default(),
+            worktree: WorktreeConfig::default(),
         }
     }
 }

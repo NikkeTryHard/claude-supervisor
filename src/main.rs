@@ -6,10 +6,14 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand, ValueEnum};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
+use claude_supervisor::ai::AiClient;
+use claude_supervisor::cli::{ClaudeProcess, ClaudeProcessBuilder, SpawnError};
 use claude_supervisor::commands::HookInstaller;
 use claude_supervisor::config::{ConfigLoader, PolicyConfig, SupervisorConfig, WorktreeConfig};
 use claude_supervisor::hooks::HookHandler;
-use claude_supervisor::supervisor::{MultiSessionSupervisor, PolicyEngine, PolicyLevel};
+use claude_supervisor::supervisor::{
+    MultiSessionSupervisor, PolicyEngine, PolicyLevel, Supervisor, SupervisorResult,
+};
 use claude_supervisor::worktree::{WorktreeManager, WorktreeRegistry};
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -529,6 +533,114 @@ async fn handle_multi(
     println!("  Denials: {}", stats.total_denials);
 }
 
+/// Handle the run command - spawn and supervise Claude Code.
+async fn handle_run(
+    task: Option<String>,
+    resume: Option<String>,
+    config: SupervisorConfig,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Handle worktree isolation if enabled
+    let (working_dir, worktree_cleanup_info) = if config.worktree.enabled {
+        tracing::info!("Creating isolated worktree for task");
+        let repo_root = std::env::current_dir()?;
+        let manager = WorktreeManager::new(repo_root, config.worktree.clone())?;
+        let task_name = task.as_deref().unwrap_or("supervised-task").to_string();
+        let worktree = manager.create(&task_name).await?;
+        let path = worktree.path.clone();
+        tracing::info!(path = %path.display(), "Running in worktree");
+        (Some(path), Some((manager, task_name)))
+    } else {
+        (None, None)
+    };
+
+    // Get prompt (task or "continue" for resume)
+    let prompt = task.unwrap_or_else(|| "continue".to_string());
+
+    // Build process
+    let mut builder = ClaudeProcessBuilder::new(&prompt);
+
+    // Add resume if provided
+    if let Some(ref session_id) = resume {
+        builder = builder.resume(session_id);
+    }
+
+    // Add allowed tools if configured
+    if !config.allowed_tools.is_empty() {
+        let tools: Vec<&str> = config.allowed_tools.iter().map(String::as_str).collect();
+        builder = builder.allowed_tools(&tools);
+    }
+
+    // Set working directory if using worktree
+    if let Some(ref dir) = working_dir {
+        builder = builder.working_dir(dir);
+    }
+
+    tracing::info!("Spawning Claude Code process");
+    let process = ClaudeProcess::spawn(&builder)?;
+
+    // Build policy engine
+    let mut policy = PolicyEngine::new(config.policy);
+    for tool in &config.allowed_tools {
+        policy.allow_tool(tool);
+    }
+
+    // Create supervisor (with or without AI)
+    let mut supervisor = if config.ai_supervisor {
+        tracing::info!("AI supervision enabled");
+        let ai_client = AiClient::from_env()?;
+        Supervisor::from_process_with_ai(process, policy, ai_client)?
+    } else {
+        Supervisor::from_process(process, policy)?
+    };
+
+    // Set task context
+    supervisor.set_task(&prompt);
+
+    // Initialize knowledge from working directory (worktree or current)
+    let cwd = std::env::current_dir()?;
+    let knowledge_dir = working_dir.clone().unwrap_or_else(|| cwd.clone());
+    supervisor.init_knowledge(&knowledge_dir).await;
+
+    // Run supervision loop
+    tracing::info!("Starting supervision loop");
+    let result = supervisor.run().await?;
+
+    // Report result
+    match result {
+        SupervisorResult::Completed {
+            session_id,
+            cost_usd,
+        } => {
+            tracing::info!(
+                session_id = ?session_id,
+                cost_usd = ?cost_usd,
+                "Session completed successfully"
+            );
+        }
+        SupervisorResult::Killed { reason } => {
+            tracing::warn!(reason = %reason, "Session killed by supervisor");
+        }
+        SupervisorResult::ProcessExited => {
+            tracing::info!("Claude process exited");
+        }
+        SupervisorResult::Cancelled => {
+            tracing::info!("Session cancelled");
+        }
+    }
+
+    // Cleanup worktree if configured
+    if let Some((manager, task_name)) = worktree_cleanup_info {
+        if config.worktree.auto_cleanup {
+            tracing::info!(worktree = %task_name, "Cleaning up worktree");
+            if let Err(e) = manager.remove(&task_name, false).await {
+                tracing::warn!(error = %e, "Failed to cleanup worktree");
+            }
+        }
+    }
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
@@ -594,7 +706,28 @@ async fn main() {
                 );
             }
 
-            tracing::warn!("Supervisor not yet implemented");
+            if let Err(e) = handle_run(task, resume, config).await {
+                // Provide user-friendly error messages for common failures
+                if let Some(spawn_err) = e.downcast_ref::<SpawnError>() {
+                    match spawn_err {
+                        SpawnError::NotFound => {
+                            eprintln!(
+                                "error: Claude CLI not found. Is 'claude' installed and in PATH?"
+                            );
+                        }
+                        SpawnError::PermissionDenied => {
+                            eprintln!("error: Permission denied when spawning Claude CLI");
+                        }
+                        SpawnError::Io(_) => {
+                            eprintln!("error: {e}");
+                        }
+                    }
+                } else {
+                    eprintln!("error: {e}");
+                }
+                tracing::error!(error = %e, "Supervisor failed");
+                std::process::exit(1);
+            }
         }
         Commands::InstallHooks => {
             handle_install_hooks();

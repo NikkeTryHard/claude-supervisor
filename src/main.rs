@@ -1,10 +1,13 @@
 //! Claude Supervisor - Automated Claude Code with AI oversight.
 
+use std::io::{self, BufRead, Write};
+
 use clap::{Parser, Subcommand, ValueEnum};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
-use claude_supervisor::config::SupervisorConfig;
-use claude_supervisor::supervisor::PolicyLevel;
+use claude_supervisor::config::{ConfigLoader, PolicyConfig, SupervisorConfig};
+use claude_supervisor::hooks::HookHandler;
+use claude_supervisor::supervisor::{PolicyEngine, PolicyLevel};
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum PolicyArg {
@@ -59,6 +62,30 @@ enum Commands {
     },
     /// Install hooks into Claude Code settings.
     InstallHooks,
+    /// Handle Claude Code hook events (reads JSON from stdin).
+    Hook {
+        #[command(subcommand)]
+        event: HookEvent,
+    },
+    /// Configuration management.
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum HookEvent {
+    /// Handle `PreToolUse` hook event.
+    PreToolUse,
+    /// Handle Stop hook event.
+    Stop,
+}
+
+#[derive(Subcommand, Clone, Copy)]
+enum ConfigAction {
+    /// Show current configuration.
+    Show,
 }
 
 fn init_tracing(verbosity: u8) {
@@ -70,9 +97,107 @@ fn init_tracing(verbosity: u8) {
     };
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(level));
     tracing_subscriber::registry()
-        .with(fmt::layer())
+        .with(fmt::layer().with_writer(io::stderr))
         .with(filter)
         .init();
+}
+
+fn build_policy_engine(config: &PolicyConfig) -> PolicyEngine {
+    let mut engine = PolicyEngine::new(config.level);
+
+    for tool in &config.tools.allowed {
+        engine.allow_tool(tool);
+    }
+
+    for tool in &config.tools.denied {
+        engine.deny_tool(tool);
+    }
+
+    engine
+}
+
+fn handle_hook(_event: HookEvent) {
+    // Load configuration
+    let loader = ConfigLoader::new();
+    let config = match loader.load() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Failed to load config: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    // Build policy engine from config
+    let policy = build_policy_engine(&config);
+    let handler = HookHandler::new(policy);
+
+    // Read JSON from stdin
+    let stdin = io::stdin();
+    let mut input = String::new();
+    for line in stdin.lock().lines() {
+        match line {
+            Ok(l) => input.push_str(&l),
+            Err(e) => {
+                eprintln!("Failed to read stdin: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+
+    // Handle the hook event
+    match handler.handle_json(&input) {
+        Ok(result) => {
+            // Write response to stdout
+            if let Err(e) = io::stdout().write_all(result.response.as_bytes()) {
+                eprintln!("Failed to write response: {e}");
+                std::process::exit(1);
+            }
+            println!();
+
+            // Exit with code 2 if deny
+            if result.should_deny {
+                std::process::exit(2);
+            }
+        }
+        Err(e) => {
+            eprintln!("Hook error: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn handle_config(action: ConfigAction) {
+    match action {
+        ConfigAction::Show => {
+            let loader = ConfigLoader::new();
+
+            // Show where we're looking for config
+            println!("# Config search paths:");
+            for path in loader.search_paths() {
+                let exists = if path.exists() { " (found)" } else { "" };
+                println!("#   {}{exists}", path.display());
+            }
+            println!();
+
+            // Load and display config
+            match loader.load() {
+                Ok(config) => {
+                    println!("# Current configuration:");
+                    match toml::to_string_pretty(&config) {
+                        Ok(toml_str) => println!("{toml_str}"),
+                        Err(e) => {
+                            eprintln!("Failed to serialize config: {e}");
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Failed to load config: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
 }
 
 #[tokio::main]
@@ -129,6 +254,12 @@ async fn main() {
         Commands::InstallHooks => {
             tracing::warn!("install-hooks not yet implemented (Phase 2)");
             eprintln!("install-hooks will be implemented in Phase 2");
+        }
+        Commands::Hook { event } => {
+            handle_hook(event);
+        }
+        Commands::Config { action } => {
+            handle_config(action);
         }
     }
 }

@@ -57,6 +57,8 @@ enum Commands {
         #[arg(long, conflicts_with = "task")]
         resume: Option<String>,
     },
+    /// Install hooks into Claude Code settings.
+    InstallHooks,
 }
 
 fn init_tracing(verbosity: u8) {
@@ -123,6 +125,10 @@ async fn main() {
             }
 
             tracing::warn!("Supervisor not yet implemented");
+        }
+        Commands::InstallHooks => {
+            tracing::warn!("install-hooks not yet implemented (Phase 2)");
+            eprintln!("install-hooks will be implemented in Phase 2");
         }
     }
 }

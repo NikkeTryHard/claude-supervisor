@@ -3,11 +3,12 @@
 //! This module provides the main orchestration layer that connects the
 //! process spawner, stream parser, and policy engine together.
 
+use std::collections::VecDeque;
 use std::time::Duration;
 
 use tokio::sync::mpsc::Receiver;
 
-use crate::ai::{AiClient, AiError, SupervisorDecision};
+use crate::ai::{AiClient, AiError, ContextCompressor, SupervisorContext, SupervisorDecision};
 use crate::cli::{
     ClaudeEvent, ClaudeProcess, ResultEvent, StreamParser, ToolUse, DEFAULT_CHANNEL_BUFFER,
 };
@@ -62,6 +63,12 @@ impl SupervisorResult {
     }
 }
 
+/// Timeout for AI supervisor API calls.
+const AI_SUPERVISOR_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Maximum number of events to keep in history for context.
+const MAX_EVENT_HISTORY: usize = 50;
+
 /// Supervisor for orchestrating Claude Code execution with policy enforcement.
 pub struct Supervisor {
     process: Option<ClaudeProcess>,
@@ -70,6 +77,9 @@ pub struct Supervisor {
     state: SessionStateMachine,
     session_id: Option<String>,
     ai_client: Option<AiClient>,
+    event_history: VecDeque<ClaudeEvent>,
+    cwd: Option<String>,
+    task: Option<String>,
 }
 
 impl Supervisor {
@@ -85,6 +95,9 @@ impl Supervisor {
             state: SessionStateMachine::new(),
             session_id: None,
             ai_client: None,
+            event_history: VecDeque::new(),
+            cwd: None,
+            task: None,
         }
     }
 
@@ -102,6 +115,9 @@ impl Supervisor {
             state: SessionStateMachine::new(),
             session_id: None,
             ai_client: Some(ai_client),
+            event_history: VecDeque::new(),
+            cwd: None,
+            task: None,
         }
     }
 
@@ -119,6 +135,9 @@ impl Supervisor {
             state: SessionStateMachine::new(),
             session_id: None,
             ai_client: None,
+            event_history: VecDeque::new(),
+            cwd: None,
+            task: None,
         }
     }
 
@@ -137,6 +156,9 @@ impl Supervisor {
             state: SessionStateMachine::new(),
             session_id: None,
             ai_client: Some(ai_client),
+            event_history: VecDeque::new(),
+            cwd: None,
+            task: None,
         }
     }
 
@@ -164,6 +186,9 @@ impl Supervisor {
             state: SessionStateMachine::new(),
             session_id: None,
             ai_client: None,
+            event_history: VecDeque::new(),
+            cwd: None,
+            task: None,
         })
     }
 
@@ -187,6 +212,9 @@ impl Supervisor {
             state: SessionStateMachine::new(),
             session_id: None,
             ai_client: Some(ai_client),
+            event_history: VecDeque::new(),
+            cwd: None,
+            task: None,
         })
     }
 
@@ -196,9 +224,21 @@ impl Supervisor {
         self.ai_client.is_some()
     }
 
+    /// Get recent events from history (most recent first).
+    #[must_use]
+    pub fn recent_events(&self, n: usize) -> Vec<&ClaudeEvent> {
+        self.event_history.iter().rev().take(n).collect()
+    }
+
+    /// Set the task being performed.
+    pub fn set_task(&mut self, task: impl Into<String>) {
+        self.task = Some(task.into());
+    }
+
     /// Ask the AI supervisor for a decision on an escalated tool call.
     ///
     /// Returns the decision or an error if the AI client is not available.
+    /// Times out after `AI_SUPERVISOR_TIMEOUT` seconds.
     async fn ask_ai_supervisor(
         &self,
         tool_use: &ToolUse,
@@ -206,14 +246,28 @@ impl Supervisor {
     ) -> Result<SupervisorDecision, AiError> {
         let ai_client = self.ai_client.as_ref().ok_or(AiError::MissingApiKey)?;
 
-        let context = format!(
-            "Escalation reason: {reason}\nSession: {}",
-            self.session_id.as_deref().unwrap_or("unknown")
+        // Build context using SupervisorContext builder
+        let context = SupervisorContext::new()
+            .with_task(self.task.as_deref().unwrap_or("unknown"))
+            .with_cwd(self.cwd.as_deref().unwrap_or("unknown"))
+            .with_session_id(self.session_id.as_deref().unwrap_or("unknown"));
+
+        // Compress event history for context
+        let compressor = ContextCompressor::default();
+        let events: Vec<ClaudeEvent> = self.event_history.iter().cloned().collect();
+        let compressed_history = compressor.compress(&events);
+
+        let context_str = format!(
+            "Escalation reason: {reason}\n\n{}\n\nRecent Activity:\n{compressed_history}",
+            context.build()
         );
 
-        ai_client
-            .ask_supervisor(&tool_use.name, &tool_use.input, &context)
-            .await
+        tokio::time::timeout(
+            AI_SUPERVISOR_TIMEOUT,
+            ai_client.ask_supervisor(&tool_use.name, &tool_use.input, &context_str),
+        )
+        .await
+        .map_err(|_| AiError::Timeout)?
     }
 
     /// Handle an escalation by consulting the AI supervisor.
@@ -359,6 +413,12 @@ impl Supervisor {
 
     /// Handle a single event and return the action to take.
     fn handle_event(&mut self, event: &ClaudeEvent) -> EventAction {
+        // Store event in history
+        self.event_history.push_back(event.clone());
+        if self.event_history.len() > MAX_EVENT_HISTORY {
+            self.event_history.pop_front();
+        }
+
         // Extract session ID if available
         if let Some(id) = event.session_id() {
             self.session_id = Some(id.to_string());
@@ -366,6 +426,7 @@ impl Supervisor {
 
         match event {
             ClaudeEvent::System(init) => {
+                self.cwd = Some(init.cwd.clone());
                 tracing::info!(
                     session_id = %init.session_id,
                     model = %init.model,
@@ -647,5 +708,70 @@ mod tests {
 
         let result = supervisor.run_without_process().await.unwrap();
         assert!(matches!(result, SupervisorResult::ProcessExited));
+    }
+
+    #[tokio::test]
+    async fn test_supervisor_tracks_event_history() {
+        let (mut supervisor, tx) = create_test_supervisor();
+
+        // Send multiple events
+        let init = ClaudeEvent::System(SystemInit {
+            cwd: "/test".to_string(),
+            tools: vec!["Read".to_string()],
+            model: "claude-3".to_string(),
+            session_id: "test-session".to_string(),
+            mcp_servers: vec![],
+            subtype: None,
+        });
+        tx.send(init).await.unwrap();
+
+        let tool_use = ClaudeEvent::ToolUse(ToolUse {
+            id: "tool-1".to_string(),
+            name: "Read".to_string(),
+            input: serde_json::json!({"file_path": "/test.txt"}),
+        });
+        tx.send(tool_use).await.unwrap();
+
+        drop(tx);
+        let _ = supervisor.run_without_process().await.unwrap();
+
+        // Check that events were tracked
+        let recent = supervisor.recent_events(10);
+        assert_eq!(recent.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_supervisor_extracts_cwd_from_init() {
+        let (mut supervisor, tx) = create_test_supervisor();
+
+        let init = ClaudeEvent::System(SystemInit {
+            cwd: "/home/user/project".to_string(),
+            tools: vec![],
+            model: "claude-3".to_string(),
+            session_id: "test-session".to_string(),
+            mcp_servers: vec![],
+            subtype: None,
+        });
+        tx.send(init).await.unwrap();
+        drop(tx);
+
+        let _ = supervisor.run_without_process().await.unwrap();
+        assert_eq!(supervisor.cwd, Some("/home/user/project".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_supervisor_set_task() {
+        let (mut supervisor, _tx) = create_test_supervisor();
+        supervisor.set_task("Fix the authentication bug");
+        assert_eq!(
+            supervisor.task,
+            Some("Fix the authentication bug".to_string())
+        );
+    }
+
+    #[test]
+    fn test_ai_error_timeout_variant() {
+        let error = AiError::Timeout;
+        assert_eq!(error.to_string(), "AI supervisor request timed out");
     }
 }

@@ -52,6 +52,8 @@ pub enum AiError {
     RequestFailed(String),
     #[error("Failed to parse response: {0}")]
     ParseError(String),
+    #[error("AI supervisor request timed out")]
+    Timeout,
 }
 
 /// Client for making AI supervisor decisions.

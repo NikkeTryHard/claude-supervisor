@@ -6,7 +6,9 @@ use claude_supervisor::supervisor::{
     DEFAULT_TERMINATE_TIMEOUT,
 };
 use serde_json::json;
+use std::time::Duration;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
 #[test]
 fn supervisor_error_display() {
@@ -249,4 +251,48 @@ fn supervisor_result_from_result_event() {
         }
         _ => panic!("Expected Completed result"),
     }
+}
+
+#[tokio::test]
+async fn test_supervisor_with_cancellation_token() {
+    let (tx, rx) = mpsc::channel(32);
+    let policy = PolicyEngine::new(PolicyLevel::Permissive);
+    let cancel = CancellationToken::new();
+
+    let supervisor = Supervisor::new(policy, rx).with_cancellation(cancel.clone());
+
+    assert!(!supervisor.is_cancelled());
+    cancel.cancel();
+    assert!(supervisor.is_cancelled());
+
+    drop(tx);
+}
+
+#[tokio::test]
+async fn test_supervisor_cancelled_during_run() {
+    let (tx, rx) = mpsc::channel(32);
+    let policy = PolicyEngine::new(PolicyLevel::Permissive);
+    let cancel = CancellationToken::new();
+
+    let mut supervisor = Supervisor::new(policy, rx).with_cancellation(cancel.clone());
+
+    // Cancel after a short delay
+    let cancel_clone = cancel.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        cancel_clone.cancel();
+    });
+
+    // Keep channel open
+    let _tx = tx;
+
+    let result = supervisor.run_without_process().await.unwrap();
+    assert!(matches!(result, SupervisorResult::Cancelled));
+}
+
+#[test]
+fn supervisor_result_cancelled_variant() {
+    let result = SupervisorResult::Cancelled;
+    let debug = format!("{result:?}");
+    assert!(debug.contains("Cancelled"));
 }

@@ -8,6 +8,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use tokio::sync::mpsc::Receiver;
+use tokio_util::sync::CancellationToken;
 
 use crate::ai::{AiClient, AiError, ContextCompressor, SupervisorContext, SupervisorDecision};
 use crate::cli::{
@@ -54,6 +55,8 @@ pub enum SupervisorResult {
     },
     /// Process exited (channel closed).
     ProcessExited,
+    /// Session was cancelled via cancellation token.
+    Cancelled,
 }
 
 impl SupervisorResult {
@@ -85,6 +88,7 @@ pub struct Supervisor {
     cwd: Option<String>,
     task: Option<String>,
     knowledge: Option<KnowledgeAggregator>,
+    cancel: Option<CancellationToken>,
 }
 
 impl Supervisor {
@@ -104,6 +108,7 @@ impl Supervisor {
             cwd: None,
             task: None,
             knowledge: None,
+            cancel: None,
         }
     }
 
@@ -125,6 +130,7 @@ impl Supervisor {
             cwd: None,
             task: None,
             knowledge: None,
+            cancel: None,
         }
     }
 
@@ -146,6 +152,7 @@ impl Supervisor {
             cwd: None,
             task: None,
             knowledge: None,
+            cancel: None,
         }
     }
 
@@ -168,6 +175,7 @@ impl Supervisor {
             cwd: None,
             task: None,
             knowledge: None,
+            cancel: None,
         }
     }
 
@@ -199,6 +207,7 @@ impl Supervisor {
             cwd: None,
             task: None,
             knowledge: None,
+            cancel: None,
         })
     }
 
@@ -226,6 +235,7 @@ impl Supervisor {
             cwd: None,
             task: None,
             knowledge: None,
+            cancel: None,
         })
     }
 
@@ -294,6 +304,21 @@ impl Supervisor {
     /// Set the task being performed.
     pub fn set_task(&mut self, task: impl Into<String>) {
         self.task = Some(task.into());
+    }
+
+    /// Set a cancellation token for graceful shutdown.
+    #[must_use]
+    pub fn with_cancellation(mut self, cancel: CancellationToken) -> Self {
+        self.cancel = Some(cancel);
+        self
+    }
+
+    /// Check if this supervisor has been cancelled.
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.cancel
+            .as_ref()
+            .is_some_and(CancellationToken::is_cancelled)
     }
 
     /// Ask the AI supervisor for a decision on an escalated tool call.
@@ -400,39 +425,71 @@ impl Supervisor {
         self.state.transition(SessionState::Running);
 
         loop {
-            if let Some(event) = self.event_rx.recv().await {
-                let action = self.handle_event(&event);
-                match action {
-                    EventAction::Continue => {}
-                    EventAction::Complete(result) => {
+            if let Some(ref cancel) = self.cancel {
+                tokio::select! {
+                    biased;
+
+                    () = cancel.cancelled() => {
+                        tracing::info!("Session cancelled via token");
                         self.state.transition(SessionState::Completed);
-                        return Ok(result);
+                        return Ok(SupervisorResult::Cancelled);
                     }
-                    EventAction::Kill(reason) => {
-                        self.state.transition(SessionState::Failed);
-                        return Ok(SupervisorResult::Killed { reason });
-                    }
-                    EventAction::Escalate { tool_use, reason } => {
-                        // Handle AI supervisor escalation
-                        match self.handle_escalation(&tool_use, &reason).await {
-                            EscalationResult::Allow => {
-                                self.state.record_approval();
-                                self.state.transition(SessionState::Running);
+                    event = self.event_rx.recv() => {
+                        if let Some(event) = event {
+                            let action = self.handle_event(&event);
+                            if let Some(result) = self.process_action(action).await? {
+                                return Ok(result);
                             }
-                            EscalationResult::Deny(deny_reason) => {
-                                self.state.record_denial();
-                                self.state.transition(SessionState::Failed);
-                                return Ok(SupervisorResult::Killed {
-                                    reason: deny_reason,
-                                });
-                            }
+                        } else {
+                            self.state.transition(SessionState::Completed);
+                            return Ok(SupervisorResult::ProcessExited);
                         }
                     }
                 }
             } else {
-                // Channel closed
+                // Original behavior without cancellation
+                let Some(event) = self.event_rx.recv().await else {
+                    self.state.transition(SessionState::Completed);
+                    return Ok(SupervisorResult::ProcessExited);
+                };
+                let action = self.handle_event(&event);
+                if let Some(result) = self.process_action(action).await? {
+                    return Ok(result);
+                }
+            }
+        }
+    }
+
+    /// Process an event action and return the result if the loop should exit.
+    async fn process_action(
+        &mut self,
+        action: EventAction,
+    ) -> Result<Option<SupervisorResult>, SupervisorError> {
+        match action {
+            EventAction::Continue => Ok(None),
+            EventAction::Complete(result) => {
                 self.state.transition(SessionState::Completed);
-                return Ok(SupervisorResult::ProcessExited);
+                Ok(Some(result))
+            }
+            EventAction::Kill(reason) => {
+                self.state.transition(SessionState::Failed);
+                Ok(Some(SupervisorResult::Killed { reason }))
+            }
+            EventAction::Escalate { tool_use, reason } => {
+                match self.handle_escalation(&tool_use, &reason).await {
+                    EscalationResult::Allow => {
+                        self.state.record_approval();
+                        self.state.transition(SessionState::Running);
+                        Ok(None)
+                    }
+                    EscalationResult::Deny(deny_reason) => {
+                        self.state.record_denial();
+                        self.state.transition(SessionState::Failed);
+                        Ok(Some(SupervisorResult::Killed {
+                            reason: deny_reason,
+                        }))
+                    }
+                }
             }
         }
     }
@@ -448,41 +505,75 @@ impl Supervisor {
         self.state.transition(SessionState::Running);
 
         loop {
-            if let Some(event) = self.event_rx.recv().await {
-                let action = self.handle_event(&event);
-                match action {
-                    EventAction::Continue => {}
-                    EventAction::Complete(result) => {
-                        self.state.transition(SessionState::Completed);
-                        return Ok(result);
-                    }
-                    EventAction::Kill(reason) => {
-                        self.state.transition(SessionState::Failed);
+            if let Some(ref cancel) = self.cancel {
+                tokio::select! {
+                    biased;
+
+                    () = cancel.cancelled() => {
+                        tracing::info!("Session cancelled via token");
                         self.terminate_process().await?;
-                        return Ok(SupervisorResult::Killed { reason });
+                        self.state.transition(SessionState::Completed);
+                        return Ok(SupervisorResult::Cancelled);
                     }
-                    EventAction::Escalate { tool_use, reason } => {
-                        // Handle AI supervisor escalation
-                        match self.handle_escalation(&tool_use, &reason).await {
-                            EscalationResult::Allow => {
-                                self.state.record_approval();
-                                self.state.transition(SessionState::Running);
+                    event = self.event_rx.recv() => {
+                        if let Some(event) = event {
+                            let action = self.handle_event(&event);
+                            if let Some(result) = self.process_action_with_terminate(action).await? {
+                                return Ok(result);
                             }
-                            EscalationResult::Deny(deny_reason) => {
-                                self.state.record_denial();
-                                self.state.transition(SessionState::Failed);
-                                self.terminate_process().await?;
-                                return Ok(SupervisorResult::Killed {
-                                    reason: deny_reason,
-                                });
-                            }
+                        } else {
+                            self.state.transition(SessionState::Completed);
+                            return Ok(SupervisorResult::ProcessExited);
                         }
                     }
                 }
             } else {
-                // Channel closed, process likely exited
+                // Original behavior without cancellation
+                let Some(event) = self.event_rx.recv().await else {
+                    // Channel closed, process likely exited
+                    self.state.transition(SessionState::Completed);
+                    return Ok(SupervisorResult::ProcessExited);
+                };
+                let action = self.handle_event(&event);
+                if let Some(result) = self.process_action_with_terminate(action).await? {
+                    return Ok(result);
+                }
+            }
+        }
+    }
+
+    /// Process an event action with process termination on kill.
+    async fn process_action_with_terminate(
+        &mut self,
+        action: EventAction,
+    ) -> Result<Option<SupervisorResult>, SupervisorError> {
+        match action {
+            EventAction::Continue => Ok(None),
+            EventAction::Complete(result) => {
                 self.state.transition(SessionState::Completed);
-                return Ok(SupervisorResult::ProcessExited);
+                Ok(Some(result))
+            }
+            EventAction::Kill(reason) => {
+                self.state.transition(SessionState::Failed);
+                self.terminate_process().await?;
+                Ok(Some(SupervisorResult::Killed { reason }))
+            }
+            EventAction::Escalate { tool_use, reason } => {
+                match self.handle_escalation(&tool_use, &reason).await {
+                    EscalationResult::Allow => {
+                        self.state.record_approval();
+                        self.state.transition(SessionState::Running);
+                        Ok(None)
+                    }
+                    EscalationResult::Deny(deny_reason) => {
+                        self.state.record_denial();
+                        self.state.transition(SessionState::Failed);
+                        self.terminate_process().await?;
+                        Ok(Some(SupervisorResult::Killed {
+                            reason: deny_reason,
+                        }))
+                    }
+                }
             }
         }
     }

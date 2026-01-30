@@ -8,6 +8,34 @@ use crate::supervisor::PolicyLevel;
 
 use super::StopConfig;
 
+/// Configuration for the AI supervisor client.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AiConfig {
+    /// Model to use for supervision.
+    #[serde(default = "default_model")]
+    pub model: String,
+    /// Maximum tokens in response.
+    #[serde(default = "default_max_tokens")]
+    pub max_tokens: u32,
+}
+
+fn default_model() -> String {
+    "claude-sonnet-4-20250514".to_string()
+}
+
+fn default_max_tokens() -> u32 {
+    1024
+}
+
+impl Default for AiConfig {
+    fn default() -> Self {
+        Self {
+            model: default_model(),
+            max_tokens: default_max_tokens(),
+        }
+    }
+}
+
 /// Configuration for the supervisor.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SupervisorConfig {
@@ -38,5 +66,28 @@ impl Default for SupervisorConfig {
             ai_supervisor: false,
             stop: StopConfig::default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ai_config_defaults() {
+        let config = AiConfig::default();
+        assert_eq!(config.model, "claude-sonnet-4-20250514");
+        assert_eq!(config.max_tokens, 1024);
+    }
+
+    #[test]
+    fn test_ai_config_deserialize() {
+        let toml = r#"
+            model = "claude-haiku-4-20250514"
+            max_tokens = 512
+        "#;
+        let config: AiConfig = toml::from_str(toml).unwrap();
+        assert_eq!(config.model, "claude-haiku-4-20250514");
+        assert_eq!(config.max_tokens, 512);
     }
 }

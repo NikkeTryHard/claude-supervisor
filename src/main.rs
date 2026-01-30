@@ -42,14 +42,20 @@ struct Cli {
 enum Commands {
     /// Run Claude Code with supervision.
     Run {
-        /// The task to execute.
-        task: String,
+        /// The task to execute (optional if --resume is used).
+        task: Option<String>,
         /// Policy level (permissive, moderate, strict).
         #[arg(short, long, value_enum, default_value_t = PolicyArg::Permissive)]
         policy: PolicyArg,
         /// Auto-continue without user prompts.
         #[arg(long)]
         auto_continue: bool,
+        /// Tools to auto-approve (comma-separated).
+        #[arg(long, value_delimiter = ',')]
+        allowed_tools: Option<Vec<String>>,
+        /// Resume a previous session by ID.
+        #[arg(long, conflicts_with = "task")]
+        resume: Option<String>,
     },
 }
 
@@ -77,18 +83,45 @@ async fn main() {
             task,
             policy,
             auto_continue,
+            allowed_tools,
+            resume,
         } => {
-            let config = SupervisorConfig {
+            // Validate: either task or resume must be provided
+            if task.is_none() && resume.is_none() {
+                eprintln!("error: either <TASK> or --resume <SESSION_ID> is required");
+                std::process::exit(1);
+            }
+
+            let mut config = SupervisorConfig {
                 policy: policy.into(),
                 auto_continue,
                 ..Default::default()
             };
-            tracing::info!(
-                task = %task,
-                policy = ?config.policy,
-                auto_continue = config.auto_continue,
-                "Starting Claude supervisor"
-            );
+
+            // Wire allowed_tools to config
+            if let Some(tools) = allowed_tools {
+                config.allowed_tools = tools.into_iter().collect();
+            }
+
+            // Log based on task or resume mode
+            if let Some(ref task_str) = task {
+                tracing::info!(
+                    task = %task_str,
+                    policy = ?config.policy,
+                    auto_continue = config.auto_continue,
+                    allowed_tools = ?config.allowed_tools,
+                    "Starting Claude supervisor"
+                );
+            } else if let Some(ref session_id) = resume {
+                tracing::info!(
+                    session_id = %session_id,
+                    policy = ?config.policy,
+                    auto_continue = config.auto_continue,
+                    allowed_tools = ?config.allowed_tools,
+                    "Resuming Claude supervisor session"
+                );
+            }
+
             tracing::warn!("Supervisor not yet implemented");
         }
     }

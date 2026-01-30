@@ -4,6 +4,8 @@
 
 use std::path::{Path, PathBuf};
 
+use super::error::WatcherError;
+
 /// Convert a project path to the hash format used by Claude Code.
 ///
 /// Claude Code stores sessions in `~/.claude/projects/<hash>/` where
@@ -91,6 +93,72 @@ pub fn find_session_by_id(sessions_dir: &Path, session_id: &str) -> Option<PathB
 pub fn discover_session(project_path: &Path) -> Option<PathBuf> {
     let sessions_dir = find_project_sessions_dir(project_path)?;
     find_latest_session(&sessions_dir)
+}
+
+/// Find the subagents directory for a session.
+///
+/// Claude Code stores subagent conversations in `<session_dir>/subagents/`.
+///
+/// Returns `None` if the subagents directory doesn't exist.
+#[must_use]
+pub fn find_subagents_dir(session_dir: &Path) -> Option<PathBuf> {
+    let subagents_dir = session_dir.join("subagents");
+    if subagents_dir.is_dir() {
+        Some(subagents_dir)
+    } else {
+        None
+    }
+}
+
+/// Extract agent ID from a subagent filename.
+///
+/// Subagent files are named `agent-<id>.jsonl`. This function extracts
+/// the `<id>` portion.
+///
+/// # Examples
+///
+/// ```
+/// use claude_supervisor::watcher::extract_agent_id;
+///
+/// assert_eq!(extract_agent_id("agent-abc1234.jsonl"), Some("abc1234".to_string()));
+/// assert_eq!(extract_agent_id("session.jsonl"), None);
+/// ```
+#[must_use]
+pub fn extract_agent_id(filename: &str) -> Option<String> {
+    let stem = filename.strip_suffix(".jsonl")?;
+    let id = stem.strip_prefix("agent-")?;
+    if id.is_empty() {
+        None
+    } else {
+        Some(id.to_string())
+    }
+}
+
+/// Discover all subagent files in a subagents directory.
+///
+/// Returns a list of (`agent_id`, path) tuples for each valid subagent file.
+///
+/// # Errors
+///
+/// Returns an error if the directory cannot be read.
+pub fn discover_subagent_files(
+    subagents_dir: &Path,
+) -> Result<Vec<(String, PathBuf)>, WatcherError> {
+    let entries = std::fs::read_dir(subagents_dir)?;
+
+    let mut agents = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().is_some_and(|ext| ext == "jsonl") {
+            if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
+                if let Some(agent_id) = extract_agent_id(filename) {
+                    agents.push((agent_id, path));
+                }
+            }
+        }
+    }
+
+    Ok(agents)
 }
 
 #[cfg(test)]
@@ -197,5 +265,82 @@ mod tests {
         let fake_project = Path::new("/tmp/nonexistent-project-67890");
         let result = discover_session(fake_project);
         assert!(result.is_none());
+    }
+
+    // Subagent discovery tests
+    #[test]
+    fn test_find_subagents_dir_exists() {
+        let temp_dir = TempDir::new().unwrap();
+        let subagents_dir = temp_dir.path().join("subagents");
+        std::fs::create_dir(&subagents_dir).unwrap();
+
+        let result = find_subagents_dir(temp_dir.path());
+        assert_eq!(result, Some(subagents_dir));
+    }
+
+    #[test]
+    fn test_find_subagents_dir_not_exists() {
+        let temp_dir = TempDir::new().unwrap();
+        let result = find_subagents_dir(temp_dir.path());
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_extract_agent_id_valid() {
+        assert_eq!(
+            extract_agent_id("agent-abc1234.jsonl"),
+            Some("abc1234".to_string())
+        );
+        assert_eq!(
+            extract_agent_id("agent-xyz-789.jsonl"),
+            Some("xyz-789".to_string())
+        );
+        assert_eq!(extract_agent_id("agent-a.jsonl"), Some("a".to_string()));
+    }
+
+    #[test]
+    fn test_extract_agent_id_invalid() {
+        assert_eq!(extract_agent_id("session.jsonl"), None);
+        assert_eq!(extract_agent_id("agent-.jsonl"), None);
+        assert_eq!(extract_agent_id("agent-abc.txt"), None);
+        assert_eq!(extract_agent_id("abc1234.jsonl"), None);
+        assert_eq!(extract_agent_id(""), None);
+    }
+
+    #[test]
+    fn test_discover_subagent_files_empty() {
+        let temp_dir = TempDir::new().unwrap();
+        let subagents_dir = temp_dir.path().join("subagents");
+        std::fs::create_dir(&subagents_dir).unwrap();
+
+        let result = discover_subagent_files(&subagents_dir).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_discover_subagent_files_with_agents() {
+        let temp_dir = TempDir::new().unwrap();
+        let subagents_dir = temp_dir.path().join("subagents");
+        std::fs::create_dir(&subagents_dir).unwrap();
+
+        // Create valid agent files
+        std::fs::write(subagents_dir.join("agent-abc123.jsonl"), "{}").unwrap();
+        std::fs::write(subagents_dir.join("agent-def456.jsonl"), "{}").unwrap();
+        // Create invalid files that should be ignored
+        std::fs::write(subagents_dir.join("session.jsonl"), "{}").unwrap();
+        std::fs::write(subagents_dir.join("agent-xyz.txt"), "{}").unwrap();
+
+        let result = discover_subagent_files(&subagents_dir).unwrap();
+        assert_eq!(result.len(), 2);
+
+        let ids: Vec<_> = result.iter().map(|(id, _)| id.as_str()).collect();
+        assert!(ids.contains(&"abc123"));
+        assert!(ids.contains(&"def456"));
+    }
+
+    #[test]
+    fn test_discover_subagent_files_nonexistent_dir() {
+        let result = discover_subagent_files(Path::new("/nonexistent/path"));
+        assert!(result.is_err());
     }
 }

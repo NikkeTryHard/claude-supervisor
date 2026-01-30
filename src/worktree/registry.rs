@@ -111,6 +111,42 @@ impl WorktreeRegistry {
     pub fn default_path(worktree_dir: &std::path::Path) -> PathBuf {
         worktree_dir.join("state.json")
     }
+
+    /// Find worktrees older than the specified duration.
+    #[must_use]
+    pub fn find_stale(&self, max_age: chrono::Duration) -> Vec<&Worktree> {
+        let cutoff = chrono::Utc::now() - max_age;
+        self.worktrees
+            .values()
+            .filter(|wt| {
+                // Use last_accessed if available, otherwise created_at
+                let timestamp = wt.last_accessed.unwrap_or(wt.created_at);
+                timestamp < cutoff && !wt.is_active()
+            })
+            .collect()
+    }
+
+    /// Find worktrees marked for cleanup.
+    #[must_use]
+    pub fn find_pending_cleanup(&self) -> Vec<&Worktree> {
+        use super::types::WorktreeStatus;
+        self.worktrees
+            .values()
+            .filter(|wt| wt.status == WorktreeStatus::PendingCleanup)
+            .collect()
+    }
+
+    /// Count worktrees by status.
+    #[must_use]
+    pub fn count_by_status(
+        &self,
+    ) -> std::collections::HashMap<super::types::WorktreeStatus, usize> {
+        let mut counts = std::collections::HashMap::new();
+        for wt in self.worktrees.values() {
+            *counts.entry(wt.status).or_insert(0) += 1;
+        }
+        counts
+    }
 }
 
 #[cfg(test)]
@@ -177,5 +213,62 @@ mod tests {
         let worktree_dir = PathBuf::from("/repo/.worktrees");
         let path = WorktreeRegistry::default_path(&worktree_dir);
         assert_eq!(path, PathBuf::from("/repo/.worktrees/state.json"));
+    }
+
+    #[test]
+    fn test_registry_find_stale() {
+        let mut registry = WorktreeRegistry::new();
+
+        // Create an old worktree
+        let mut old_wt = Worktree::new("old", PathBuf::from("/tmp/old"), "main");
+        old_wt.last_accessed = Some(chrono::Utc::now() - chrono::Duration::hours(48));
+        registry.upsert(old_wt);
+
+        // Create a recent worktree
+        let mut recent_wt = Worktree::new("recent", PathBuf::from("/tmp/recent"), "main");
+        recent_wt.last_accessed = Some(chrono::Utc::now());
+        registry.upsert(recent_wt);
+
+        // Find worktrees older than 24 hours
+        let stale = registry.find_stale(chrono::Duration::hours(24));
+        assert_eq!(stale.len(), 1);
+        assert_eq!(stale[0].name, "old");
+    }
+
+    #[test]
+    fn test_registry_find_pending_cleanup() {
+        let mut registry = WorktreeRegistry::new();
+
+        let wt1 = Worktree::new("normal", PathBuf::from("/tmp/normal"), "main");
+        registry.upsert(wt1);
+
+        let mut wt2 = Worktree::new("cleanup", PathBuf::from("/tmp/cleanup"), "main");
+        wt2.mark_for_cleanup();
+        registry.upsert(wt2);
+
+        let pending = registry.find_pending_cleanup();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].name, "cleanup");
+    }
+
+    #[test]
+    fn test_registry_count_by_status() {
+        use crate::worktree::WorktreeStatus;
+
+        let mut registry = WorktreeRegistry::new();
+
+        let wt1 = Worktree::new("idle1", PathBuf::from("/tmp/idle1"), "main");
+        registry.upsert(wt1);
+
+        let wt2 = Worktree::new("idle2", PathBuf::from("/tmp/idle2"), "main");
+        registry.upsert(wt2);
+
+        let mut wt3 = Worktree::new("active", PathBuf::from("/tmp/active"), "main");
+        wt3.activate("session");
+        registry.upsert(wt3);
+
+        let counts = registry.count_by_status();
+        assert_eq!(counts.get(&WorktreeStatus::Idle), Some(&2));
+        assert_eq!(counts.get(&WorktreeStatus::Active), Some(&1));
     }
 }

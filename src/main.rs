@@ -30,6 +30,10 @@ impl From<PolicyArg> for PolicyLevel {
     version
 )]
 struct Cli {
+    /// Increase verbosity (-v, -vv, -vvv)
+    #[arg(short = 'v', long, action = clap::ArgAction::Count)]
+    verbose: u8,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -49,8 +53,14 @@ enum Commands {
     },
 }
 
-fn init_tracing() {
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+fn init_tracing(verbosity: u8) {
+    let level = match verbosity {
+        0 => "warn",
+        1 => "info",
+        2 => "debug",
+        _ => "trace",
+    };
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(level));
     tracing_subscriber::registry()
         .with(fmt::layer())
         .with(filter)
@@ -59,8 +69,8 @@ fn init_tracing() {
 
 #[tokio::main]
 async fn main() {
-    init_tracing();
     let cli = Cli::parse();
+    init_tracing(cli.verbose);
 
     match cli.command {
         Commands::Run {

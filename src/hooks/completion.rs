@@ -1,5 +1,16 @@
 //! Completion detection for stop hook handling.
 
+/// Result of analyzing text for completion status.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CompletionStatus {
+    /// Task appears to be complete.
+    Complete,
+    /// Task appears incomplete, with reason.
+    Incomplete(String),
+    /// Cannot determine completion status.
+    Unknown,
+}
+
 /// Detects whether Claude's response indicates task completion.
 #[derive(Debug, Clone)]
 pub struct CompletionDetector {
@@ -21,24 +32,33 @@ impl CompletionDetector {
     /// Incomplete phrases take priority over complete phrases.
     #[must_use]
     pub fn is_complete(&self, text: &str) -> bool {
+        matches!(self.analyze(text), CompletionStatus::Complete)
+    }
+
+    /// Analyze text and return detailed completion status.
+    ///
+    /// Checks incomplete phrases first (priority), then complete phrases.
+    /// Returns `Unknown` if no phrases match.
+    #[must_use]
+    pub fn analyze(&self, text: &str) -> CompletionStatus {
         let text_lower = text.to_lowercase();
 
         // Incomplete phrases take priority
         for phrase in &self.incomplete_phrases {
             if text_lower.contains(&phrase.to_lowercase()) {
-                return false;
+                return CompletionStatus::Incomplete(format!("Found incomplete phrase: {phrase}"));
             }
         }
 
         // Check for completion phrases
         for phrase in &self.complete_phrases {
             if text_lower.contains(&phrase.to_lowercase()) {
-                return true;
+                return CompletionStatus::Complete;
             }
         }
 
-        // Default: not complete (be conservative)
-        false
+        // Default: unknown
+        CompletionStatus::Unknown
     }
 }
 
@@ -122,5 +142,49 @@ mod tests {
             CompletionDetector::new(vec!["finished".to_string()], vec!["pending".to_string()]);
         assert!(detector.is_complete("The work is finished."));
         assert!(!detector.is_complete("Some tasks are pending."));
+    }
+
+    // CompletionStatus tests
+    #[test]
+    fn test_completion_status_equality() {
+        assert_eq!(CompletionStatus::Complete, CompletionStatus::Complete);
+        assert_eq!(CompletionStatus::Unknown, CompletionStatus::Unknown);
+        assert_eq!(
+            CompletionStatus::Incomplete("reason".to_string()),
+            CompletionStatus::Incomplete("reason".to_string())
+        );
+        assert_ne!(CompletionStatus::Complete, CompletionStatus::Unknown);
+    }
+
+    #[test]
+    fn test_analyze_returns_complete() {
+        let detector = CompletionDetector::default();
+        let status = detector.analyze("The task is complete.");
+        assert_eq!(status, CompletionStatus::Complete);
+    }
+
+    #[test]
+    fn test_analyze_returns_incomplete() {
+        let detector = CompletionDetector::default();
+        let status = detector.analyze("Now I'll implement the next feature.");
+        assert!(matches!(status, CompletionStatus::Incomplete(_)));
+        if let CompletionStatus::Incomplete(reason) = status {
+            assert!(reason.contains("now i'll"));
+        }
+    }
+
+    #[test]
+    fn test_analyze_returns_unknown() {
+        let detector = CompletionDetector::default();
+        let status = detector.analyze("Here is some random text.");
+        assert_eq!(status, CompletionStatus::Unknown);
+    }
+
+    #[test]
+    fn test_analyze_incomplete_priority() {
+        let detector = CompletionDetector::default();
+        // Contains both complete and incomplete phrases
+        let status = detector.analyze("The task is complete, but now I'll add more tests.");
+        assert!(matches!(status, CompletionStatus::Incomplete(_)));
     }
 }

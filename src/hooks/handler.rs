@@ -3,8 +3,9 @@
 use crate::config::StopConfig;
 use crate::ipc::{EscalationRequest, EscalationResponse, IpcClient};
 use crate::supervisor::{PolicyDecision, PolicyEngine};
+use crate::watcher::{PatternDetector, StuckPattern, ToolCallRecord};
 
-use super::completion::CompletionDetector;
+use super::completion::{CompletionDetector, CompletionStatus};
 use super::input::HookInput;
 use super::iteration::IterationTracker;
 use super::pre_tool_use::PreToolUseResponse;
@@ -39,6 +40,7 @@ pub struct HookHandler {
     stop_config: StopConfig,
     iterations: IterationTracker,
     completion: CompletionDetector,
+    pattern_detector: PatternDetector,
     ipc_client: Option<IpcClient>,
 }
 
@@ -51,6 +53,7 @@ impl HookHandler {
             stop_config: StopConfig::default(),
             iterations: IterationTracker::new(),
             completion: CompletionDetector::default(),
+            pattern_detector: PatternDetector::new(),
             ipc_client: None,
         }
     }
@@ -67,6 +70,7 @@ impl HookHandler {
             stop_config,
             iterations: IterationTracker::new(),
             completion,
+            pattern_detector: PatternDetector::new(),
             ipc_client: None,
         }
     }
@@ -234,6 +238,108 @@ impl HookHandler {
     #[must_use]
     pub fn completion(&self) -> &CompletionDetector {
         &self.completion
+    }
+
+    /// Get the pattern detector.
+    #[must_use]
+    pub fn pattern_detector(&self) -> &PatternDetector {
+        &self.pattern_detector
+    }
+
+    /// Check if the agent should continue based on completion analysis.
+    ///
+    /// Returns `Some(reason)` if the agent should continue, `None` if it can stop.
+    #[must_use]
+    pub fn should_continue(&self, input: &HookInput) -> Option<String> {
+        // If force_continue is enabled, always continue
+        if self.stop_config.force_continue {
+            return Some("Force continue is enabled".to_string());
+        }
+
+        // Check iteration count - if exceeded, allow stop
+        let iteration = self.iterations.get(&input.session_id);
+        if iteration >= self.stop_config.max_iterations {
+            return None;
+        }
+
+        // Analyze transcript path if available for completion status
+        // For now, we rely on external analysis via decide_stop
+        None
+    }
+
+    /// Check for stuck patterns in tool call history.
+    #[must_use]
+    pub fn check_stuck_pattern(&self, calls: &[ToolCallRecord]) -> Option<StuckPattern> {
+        self.pattern_detector.detect(calls)
+    }
+
+    /// Decide whether to allow or block a stop event.
+    ///
+    /// Uses completion detection and stuck pattern analysis to make the decision.
+    #[must_use]
+    pub fn decide_stop(
+        &self,
+        input: &HookInput,
+        tool_calls: &[ToolCallRecord],
+        final_message: Option<&str>,
+    ) -> StopResponse {
+        // Check for infinite loop prevention
+        if input.stop_hook_active == Some(true) {
+            tracing::debug!("Stop hook already active, allowing to prevent infinite loop");
+            return StopResponse::allow();
+        }
+
+        // Check iteration count
+        let iteration = self.iterations.get(&input.session_id);
+        if iteration >= self.stop_config.max_iterations {
+            tracing::info!(
+                session = %input.session_id,
+                iteration = iteration,
+                max = self.stop_config.max_iterations,
+                "Max iterations reached, allowing stop"
+            );
+            return StopResponse::allow();
+        }
+
+        // Check for stuck patterns - if stuck, allow stop
+        if let Some(pattern) = self.check_stuck_pattern(tool_calls) {
+            tracing::warn!(
+                session = %input.session_id,
+                pattern = %pattern,
+                "Detected stuck pattern, allowing stop"
+            );
+            return StopResponse::allow();
+        }
+
+        // Analyze final message for completion status
+        if let Some(message) = final_message {
+            match self.completion.analyze(message) {
+                CompletionStatus::Complete => {
+                    tracing::info!(session = %input.session_id, "Task appears complete");
+                    return StopResponse::allow();
+                }
+                CompletionStatus::Incomplete(reason) => {
+                    tracing::info!(
+                        session = %input.session_id,
+                        reason = %reason,
+                        "Task appears incomplete, blocking stop"
+                    );
+                    return StopResponse::block(format!("Task incomplete: {reason}"));
+                }
+                CompletionStatus::Unknown => {
+                    // Fall through to default behavior
+                }
+            }
+        }
+
+        // If force_continue is enabled, block the stop
+        if self.stop_config.force_continue {
+            tracing::info!(session = %input.session_id, "Force continue enabled, blocking stop");
+            return StopResponse::block("Continue working on the task.");
+        }
+
+        // Default: allow stop
+        StopResponse::allow()
     }
 
     /// Attempt to escalate a tool call to the supervisor via IPC.

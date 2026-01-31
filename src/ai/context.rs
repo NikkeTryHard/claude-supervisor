@@ -91,7 +91,7 @@ impl ContextCompressor {
             | ClaudeEvent::ContentBlockStop { .. }
             | ClaudeEvent::ContentBlockDelta { .. }
             | ClaudeEvent::User { .. }
-            | ClaudeEvent::Unknown => String::new(),
+            | ClaudeEvent::Other(_) => String::new(),
         }
     }
 
@@ -273,6 +273,7 @@ mod tests {
             agents: vec![],
             skills: vec![],
             slash_commands: vec![],
+            extras: std::collections::HashMap::new(),
         })];
 
         let result = compressor.compress(&events);

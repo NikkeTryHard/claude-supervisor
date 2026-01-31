@@ -860,6 +860,7 @@ mod tests {
             is_error: false,
             cost_usd: Some(0.05),
             duration_ms: Some(1000),
+            extras: std::collections::HashMap::new(),
         });
 
         tx.send(result_event).await.unwrap();

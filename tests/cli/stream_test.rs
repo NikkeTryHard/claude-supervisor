@@ -84,7 +84,13 @@ fn parse_line_unknown_event_type() {
     let result = StreamParser::parse_line(line);
 
     assert!(result.is_ok());
-    assert!(matches!(result.unwrap(), ClaudeEvent::Unknown));
+    match result.unwrap() {
+        ClaudeEvent::Other(value) => {
+            assert_eq!(value.get("type").unwrap(), "future_event_type");
+            assert_eq!(value.get("data").unwrap(), "something");
+        }
+        _ => panic!("Expected Other variant"),
+    }
 }
 
 #[test]

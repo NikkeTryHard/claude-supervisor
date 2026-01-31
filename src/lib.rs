@@ -6,6 +6,7 @@ pub mod cli;
 pub mod commands;
 pub mod config;
 pub mod dashboard;
+pub mod display;
 pub mod hooks;
 pub mod integration;
 pub mod ipc;

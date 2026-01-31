@@ -12,8 +12,10 @@ use tokio_util::sync::CancellationToken;
 
 use crate::ai::{AiClient, AiError, ContextCompressor, SupervisorContext, SupervisorDecision};
 use crate::cli::{
-    ClaudeEvent, ClaudeProcess, ResultEvent, StreamParser, ToolUse, DEFAULT_CHANNEL_BUFFER,
+    ClaudeEvent, ClaudeProcess, ContentDelta, ResultEvent, StreamParser, ToolUse,
+    DEFAULT_CHANNEL_BUFFER,
 };
+use crate::display;
 use crate::knowledge::{
     ClaudeMdSource, KnowledgeAggregator, KnowledgeSource, MemorySource, SessionHistorySource,
 };
@@ -379,6 +381,7 @@ impl Supervisor {
     async fn handle_escalation(&self, tool_use: &ToolUse, reason: &str) -> EscalationResult {
         match self.ask_ai_supervisor(tool_use, reason).await {
             Ok(SupervisorDecision::Allow { reason }) => {
+                display::print_supervisor_decision("ALLOW", &tool_use.name);
                 tracing::info!(
                     tool = %tool_use.name,
                     %reason,
@@ -387,6 +390,7 @@ impl Supervisor {
                 EscalationResult::Allow
             }
             Ok(SupervisorDecision::Deny { reason }) => {
+                display::print_supervisor_decision("DENY", &tool_use.name);
                 tracing::warn!(
                     tool = %tool_use.name,
                     %reason,
@@ -396,6 +400,7 @@ impl Supervisor {
             }
             Ok(SupervisorDecision::Guide { reason, guidance }) => {
                 // For now, treat guidance as an allow with logged guidance
+                display::print_supervisor_decision("GUIDE", &tool_use.name);
                 tracing::info!(
                     tool = %tool_use.name,
                     %reason,
@@ -405,6 +410,7 @@ impl Supervisor {
                 EscalationResult::Allow
             }
             Err(e) => {
+                display::print_error(&format!("AI supervisor error: {e}"));
                 tracing::error!(
                     tool = %tool_use.name,
                     error = %e,
@@ -596,6 +602,7 @@ impl Supervisor {
         match event {
             ClaudeEvent::System(init) => {
                 self.cwd = Some(init.cwd.clone());
+                display::print_session_start(&init.model, &init.session_id);
                 tracing::info!(
                     session_id = %init.session_id,
                     model = %init.model,
@@ -606,9 +613,11 @@ impl Supervisor {
             }
             ClaudeEvent::ToolUse(tool_use) => {
                 self.state.record_tool_call();
+                display::print_tool_request(&tool_use.name, &tool_use.input);
                 self.evaluate_tool_use(tool_use)
             }
             ClaudeEvent::Result(result) => {
+                display::print_session_end(result.cost_usd, result.is_error);
                 tracing::info!(
                     session_id = %result.session_id,
                     cost_usd = ?result.cost_usd,
@@ -616,6 +625,18 @@ impl Supervisor {
                     "Session completed"
                 );
                 EventAction::Complete(SupervisorResult::from_result_event(result))
+            }
+            ClaudeEvent::ContentBlockDelta { delta, .. } => {
+                match delta {
+                    ContentDelta::ThinkingDelta { thinking } => {
+                        display::print_thinking(thinking);
+                    }
+                    ContentDelta::TextDelta { text } => {
+                        display::print_text(text);
+                    }
+                    _ => {}
+                }
+                EventAction::Continue
             }
             ClaudeEvent::MessageStop => EventAction::Complete(SupervisorResult::Completed {
                 session_id: self.session_id.clone(),
@@ -632,6 +653,7 @@ impl Supervisor {
         match decision {
             PolicyDecision::Allow => {
                 self.state.record_approval();
+                display::print_allow(&tool_use.name);
                 tracing::debug!(tool = %tool_use.name, "Tool call allowed");
                 EventAction::Continue
             }
@@ -639,16 +661,19 @@ impl Supervisor {
                 // In the runner context, we treat modified input as a simple allow
                 // The actual modification is handled by the hook handler
                 self.state.record_approval();
+                display::print_allow(&tool_use.name);
                 tracing::debug!(tool = %tool_use.name, "Tool call allowed with modification");
                 EventAction::Continue
             }
             PolicyDecision::Deny(reason) => {
                 self.state.record_denial();
+                display::print_deny(&tool_use.name, &reason);
                 tracing::warn!(tool = %tool_use.name, reason = %reason, "Tool call denied");
                 EventAction::Kill(reason)
             }
             PolicyDecision::Escalate(reason) => {
                 self.state.transition(SessionState::WaitingForSupervisor);
+                display::print_escalate(&tool_use.name, &reason);
                 // Check if AI supervisor is available for escalation
                 if self.ai_client.is_some() {
                     tracing::info!(

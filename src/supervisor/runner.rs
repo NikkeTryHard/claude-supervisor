@@ -796,6 +796,11 @@ mod tests {
             session_id: "test-session".to_string(),
             mcp_servers: vec![],
             subtype: None,
+            permission_mode: None,
+            claude_code_version: None,
+            agents: vec![],
+            skills: vec![],
+            slash_commands: vec![],
         });
 
         tx.send(init).await.unwrap();
@@ -921,6 +926,11 @@ mod tests {
             session_id: "test-session".to_string(),
             mcp_servers: vec![],
             subtype: None,
+            permission_mode: None,
+            claude_code_version: None,
+            agents: vec![],
+            skills: vec![],
+            slash_commands: vec![],
         });
         tx.send(init).await.unwrap();
 
@@ -950,6 +960,11 @@ mod tests {
             session_id: "test-session".to_string(),
             mcp_servers: vec![],
             subtype: None,
+            permission_mode: None,
+            claude_code_version: None,
+            agents: vec![],
+            skills: vec![],
+            slash_commands: vec![],
         });
         tx.send(init).await.unwrap();
         drop(tx);

@@ -43,6 +43,7 @@ RUN mkdir -p /home/claude/.claude \
     && mkdir -p /home/claude/.config/claude-supervisor \
     && chown -R claude:claude /home/claude/.claude /home/claude/.config
 COPY --chown=claude:claude config.example.toml /home/claude/.config/claude-supervisor/config.toml
+COPY --chown=claude:claude docker/claude-settings.json /home/claude/.claude/settings.json
 
 # Switch to claude user for Claude Code installation
 USER claude

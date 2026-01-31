@@ -46,7 +46,7 @@ fn default_max_tokens() -> u32 {
 }
 
 fn default_base_url() -> String {
-    "http://127.0.0.1:8045/v1beta".to_string()
+    "http://host.docker.internal:8045/v1beta".to_string()
 }
 
 fn default_api_key_env() -> String {
@@ -94,7 +94,7 @@ impl Default for SupervisorConfig {
                 .map(String::from)
                 .collect(),
             denied_tools: HashSet::new(),
-            ai_supervisor: false,
+            ai_supervisor: true,
             stop: StopConfig::default(),
             worktree: WorktreeConfig::default(),
         }

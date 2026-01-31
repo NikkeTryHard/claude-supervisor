@@ -405,6 +405,21 @@ impl AiClient {
         &self.config.provider
     }
 
+    /// Test connectivity to the AI provider.
+    ///
+    /// Sends a minimal request to verify the API is reachable and the key is valid.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AiError::RequestFailed` if the API is unreachable.
+    /// Returns `AiError::Timeout` if the request times out.
+    pub async fn test_connection(&self) -> Result<(), AiError> {
+        self.provider
+            .generate("Respond with OK", "ping")
+            .await
+            .map(|_| ())
+    }
+
     /// Ask the AI supervisor whether to allow a tool call.
     ///
     /// # Errors

@@ -17,13 +17,15 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - RUST_LOG=info
+      - TERM=xterm-256color
+      - LANG=C.UTF-8
+      - CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
     volumes:
-      # Claude Code settings (read-only to protect host)
+      # Claude Code settings - writable so Claude can update them
       - ~/.claude/CLAUDE.md:/home/claude/.claude/CLAUDE.md:ro
-      - ~/.claude/settings.json:/home/claude/.claude/settings.json:ro
+      - ./docker/claude-settings.json:/home/claude/.claude/settings.json
       - ~/.claude/skills:/home/claude/.claude/skills:ro
-      - ~/.claude/hooks:/home/claude/.claude/hooks:ro
-      - ~/.claude.json:/home/claude/.claude.json:ro
+      # Note: ~/.claude.json NOT mounted - container manages its own trust state
       # Supervisor config (editable)
       - ./config.example.toml:/home/claude/.config/claude-supervisor/config.toml
       # Mount current project for testing

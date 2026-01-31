@@ -62,14 +62,23 @@ pub fn print_session_start(model: &str, session_id: &str) {
 }
 
 /// Print session end information.
-pub fn print_session_end(cost_usd: Option<f64>, is_error: bool, session_id: Option<&str>, result_msg: Option<&str>) {
+pub fn print_session_end(
+    cost_usd: Option<f64>,
+    is_error: bool,
+    session_id: Option<&str>,
+    result_msg: Option<&str>,
+) {
     let ts = timestamp();
+    let sid_str = session_id.map_or(String::new(), |id| {
+        format!("session_id={}", truncate(id, 20))
+    });
+    let sid = sid_str.dimmed();
     if is_error {
         println!(
             "{} {} Session ended with error {}",
             ts.dimmed(),
             "[SESSION]".red().bold(),
-            session_id.map_or("".to_string(), |id| format!("session_id={}", truncate(id, 20))).dimmed()
+            sid
         );
         if let Some(msg) = result_msg {
             if !msg.is_empty() {
@@ -88,14 +97,14 @@ pub fn print_session_end(cost_usd: Option<f64>, is_error: bool, session_id: Opti
             ts.dimmed(),
             "[SESSION]".blue().bold(),
             cost,
-            session_id.map_or("".to_string(), |id| format!("session_id={}", truncate(id, 20))).dimmed()
+            sid
         );
     } else {
         println!(
             "{} {} Session completed {}",
             ts.dimmed(),
             "[SESSION]".blue().bold(),
-            session_id.map_or("".to_string(), |id| format!("session_id={}", truncate(id, 20))).dimmed()
+            sid
         );
     }
     let _ = io::stdout().flush();
@@ -166,6 +175,31 @@ pub fn print_text(text: &str) {
 /// Print an error message.
 pub fn print_error(message: &str) {
     println!("{} {}", "[ERROR]".red().bold(), message);
+    let _ = io::stdout().flush();
+}
+
+/// Print AI provider connection test result.
+pub fn print_connection_test(provider: &str, model: &str, success: bool) {
+    let ts = timestamp();
+    if success {
+        println!(
+            "{} {} {} ({}) - {}",
+            ts.dimmed(),
+            "[AI]".magenta().bold(),
+            provider.cyan(),
+            model.dimmed(),
+            "connected".green()
+        );
+    } else {
+        println!(
+            "{} {} {} ({}) - {}",
+            ts.dimmed(),
+            "[AI]".magenta().bold(),
+            provider.cyan(),
+            model.dimmed(),
+            "failed".red()
+        );
+    }
     let _ = io::stdout().flush();
 }
 

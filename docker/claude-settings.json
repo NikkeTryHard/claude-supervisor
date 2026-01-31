@@ -1,0 +1,39 @@
+{
+  "env": {
+    "ANTHROPIC_AUTH_TOKEN": "test",
+    "ANTHROPIC_BASE_URL": "http://host.docker.internal:8045",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-5-thinking",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-opus-4-5-thinking",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "gemini-3-flash",
+    "BASH_DEFAULT_TIMEOUT_MS": "600000",
+    "BASH_MAX_TIMEOUT_MS": "1200000",
+    "CLAUDE_CODE_DISABLE_COMMAND_INJECTION_CHECK": "1",
+    "CLAUDE_CODE_DISABLE_SANDBOX": "1",
+    "ENABLE_INCREMENTAL_TUI": "true"
+  },
+  "attribution": {
+    "commit": "",
+    "pr": ""
+  },
+  "includeCoAuthoredBy": false,
+  "permissions": {
+    "deny": [
+      "WebSearch",
+      "Bash",
+      "WebFetch"
+    ],
+    "defaultMode": "acceptEdits"
+  },
+  "hooks": {},
+  "enabledPlugins": {
+    "superpowers@claude-plugins-official": false,
+    "design-engineer@design-engineer": false,
+    "dev-browser@dev-browser-marketplace": false,
+    "rust-analyzer-lsp@claude-plugins-official": false,
+    "frontend-design@claude-plugins-official": false,
+    "interface-design@interface-design": false
+  },
+  "promptSuggestionEnabled": false,
+  "autoUpdatesChannel": "latest",
+  "model": "opus"
+}

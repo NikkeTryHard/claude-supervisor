@@ -91,6 +91,7 @@ pub struct Supervisor {
     task: Option<String>,
     knowledge: Option<KnowledgeAggregator>,
     cancel: Option<CancellationToken>,
+    raw_mode: bool,
 }
 
 impl Supervisor {
@@ -111,6 +112,7 @@ impl Supervisor {
             task: None,
             knowledge: None,
             cancel: None,
+            raw_mode: false,
         }
     }
 
@@ -133,6 +135,7 @@ impl Supervisor {
             task: None,
             knowledge: None,
             cancel: None,
+            raw_mode: false,
         }
     }
 
@@ -155,6 +158,7 @@ impl Supervisor {
             task: None,
             knowledge: None,
             cancel: None,
+            raw_mode: false,
         }
     }
 
@@ -178,6 +182,7 @@ impl Supervisor {
             task: None,
             knowledge: None,
             cancel: None,
+            raw_mode: false,
         }
     }
 
@@ -210,6 +215,7 @@ impl Supervisor {
             task: None,
             knowledge: None,
             cancel: None,
+            raw_mode: false,
         })
     }
 
@@ -238,6 +244,7 @@ impl Supervisor {
             task: None,
             knowledge: None,
             cancel: None,
+            raw_mode: false,
         })
     }
 
@@ -306,6 +313,11 @@ impl Supervisor {
     /// Set the task being performed.
     pub fn set_task(&mut self, task: impl Into<String>) {
         self.task = Some(task.into());
+    }
+
+    /// Set raw mode for verbose output.
+    pub fn set_raw_mode(&mut self, raw_mode: bool) {
+        self.raw_mode = raw_mode;
     }
 
     /// Set a cancellation token for graceful shutdown.
@@ -587,6 +599,7 @@ impl Supervisor {
     }
 
     /// Handle a single event and return the action to take.
+    #[allow(clippy::too_many_lines)]
     fn handle_event(&mut self, event: &ClaudeEvent) -> EventAction {
         // Store event in history
         self.event_history.push_back(event.clone());
@@ -602,7 +615,7 @@ impl Supervisor {
         match event {
             ClaudeEvent::System(init) => {
                 self.cwd = Some(init.cwd.clone());
-                display::print_session_start(&init.model, &init.session_id);
+                display::print_session_start(&init.model, &init.session_id, self.raw_mode);
                 tracing::info!(
                     session_id = %init.session_id,
                     model = %init.model,
@@ -613,7 +626,7 @@ impl Supervisor {
             }
             ClaudeEvent::ToolUse(tool_use) => {
                 self.state.record_tool_call();
-                display::print_tool_request(&tool_use.name, &tool_use.input);
+                display::print_tool_request(&tool_use.name, &tool_use.input, self.raw_mode);
                 self.evaluate_tool_use(tool_use)
             }
             ClaudeEvent::Result(result) => {
@@ -622,6 +635,7 @@ impl Supervisor {
                     result.is_error,
                     Some(&result.session_id),
                     Some(&result.result),
+                    self.raw_mode,
                 );
                 tracing::info!(
                     session_id = %result.session_id,
@@ -639,7 +653,14 @@ impl Supervisor {
                     ContentDelta::TextDelta { text } => {
                         display::print_text(text);
                     }
-                    _ => {}
+                    other => {
+                        if self.raw_mode {
+                            display::print_raw_event(
+                                "DELTA",
+                                &serde_json::to_string(other).unwrap_or_default(),
+                            );
+                        }
+                    }
                 }
                 EventAction::Continue
             }
@@ -648,7 +669,12 @@ impl Supervisor {
                 cost_usd: None,
             }),
             ClaudeEvent::ToolResult(result) => {
-                display::print_tool_result(&result.tool_use_id, &result.content, result.is_error);
+                display::print_tool_result(
+                    &result.tool_use_id,
+                    &result.content,
+                    result.is_error,
+                    self.raw_mode,
+                );
                 tracing::debug!(
                     tool_use_id = %result.tool_use_id,
                     is_error = result.is_error,
@@ -667,7 +693,7 @@ impl Supervisor {
                         other => other.to_string(),
                     };
                     let is_error = result_text.contains("error") || result_text.contains("Error");
-                    display::print_tool_result("user", &result_text, is_error);
+                    display::print_tool_result("user", &result_text, is_error, self.raw_mode);
                     tracing::debug!(
                         content_len = result_text.len(),
                         "Tool result from user event"
@@ -675,7 +701,15 @@ impl Supervisor {
                 }
                 EventAction::Continue
             }
-            _ => EventAction::Continue,
+            other => {
+                if self.raw_mode {
+                    display::print_raw_event(
+                        "EVENT",
+                        &serde_json::to_string(other).unwrap_or_default(),
+                    );
+                }
+                EventAction::Continue
+            }
         }
     }
 

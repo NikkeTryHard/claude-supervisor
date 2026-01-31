@@ -18,7 +18,10 @@ const DEFAULT_MAX_LEN: usize = 80;
 
 /// Truncate a string to a maximum length, adding ellipsis if truncated.
 #[must_use]
-pub fn truncate(s: &str, max_len: usize) -> String {
+pub fn truncate(s: &str, max_len: usize, raw_mode: bool) -> String {
+    if raw_mode {
+        return s.to_string();
+    }
     if s.len() <= max_len {
         s.to_string()
     } else if max_len <= 3 {
@@ -30,33 +33,33 @@ pub fn truncate(s: &str, max_len: usize) -> String {
 
 /// Format tool input for display, truncating long values.
 #[must_use]
-pub fn format_tool_input(input: &serde_json::Value) -> String {
+pub fn format_tool_input(input: &serde_json::Value, raw_mode: bool) -> String {
     match input {
         serde_json::Value::Object(map) => {
             let pairs: Vec<String> = map
                 .iter()
                 .map(|(k, v)| {
                     let value_str = match v {
-                        serde_json::Value::String(s) => truncate(s, 50),
-                        other => truncate(&other.to_string(), 50),
+                        serde_json::Value::String(s) => truncate(s, 50, raw_mode),
+                        other => truncate(&other.to_string(), 50, raw_mode),
                     };
                     format!("{k}={value_str}")
                 })
                 .collect();
             pairs.join(", ")
         }
-        other => truncate(&other.to_string(), DEFAULT_MAX_LEN),
+        other => truncate(&other.to_string(), DEFAULT_MAX_LEN, raw_mode),
     }
 }
 
 /// Print session start information.
-pub fn print_session_start(model: &str, session_id: &str) {
+pub fn print_session_start(model: &str, session_id: &str, raw_mode: bool) {
     println!(
         "{} {} model={}, session={}",
         timestamp().dimmed(),
         "[SESSION]".blue().bold(),
         model.cyan(),
-        truncate(session_id, 20).dimmed()
+        truncate(session_id, 20, raw_mode).dimmed()
     );
     let _ = io::stdout().flush();
 }
@@ -67,6 +70,7 @@ pub fn print_session_end(
     is_error: bool,
     session_id: Option<&str>,
     result_msg: Option<&str>,
+    raw_mode: bool,
 ) {
     let ts = timestamp();
     if is_error {
@@ -77,7 +81,7 @@ pub fn print_session_end(
             session_id
                 .map_or(String::new(), |id| format!(
                     "session_id={}",
-                    truncate(id, 20)
+                    truncate(id, 20, raw_mode)
                 ))
                 .dimmed()
         );
@@ -87,7 +91,7 @@ pub fn print_session_end(
                     "{} {} {}",
                     ts.dimmed(),
                     "[ERROR]".red().bold(),
-                    truncate(msg, 200).red()
+                    truncate(msg, 200, raw_mode).red()
                 );
             }
         }
@@ -101,7 +105,7 @@ pub fn print_session_end(
             session_id
                 .map_or(String::new(), |id| format!(
                     "session_id={}",
-                    truncate(id, 20)
+                    truncate(id, 20, raw_mode)
                 ))
                 .dimmed()
         );
@@ -113,7 +117,7 @@ pub fn print_session_end(
             session_id
                 .map_or(String::new(), |id| format!(
                     "session_id={}",
-                    truncate(id, 20)
+                    truncate(id, 20, raw_mode)
                 ))
                 .dimmed()
         );
@@ -122,12 +126,12 @@ pub fn print_session_end(
 }
 
 /// Print a tool request.
-pub fn print_tool_request(name: &str, input: &serde_json::Value) {
+pub fn print_tool_request(name: &str, input: &serde_json::Value, raw_mode: bool) {
     println!(
         "{} {} ({})",
         "[TOOL]".cyan().bold(),
         name.bold(),
-        format_tool_input(input).dimmed()
+        format_tool_input(input, raw_mode).dimmed()
     );
     let _ = io::stdout().flush();
 }
@@ -184,9 +188,9 @@ pub fn print_text(text: &str) {
 }
 
 /// Print tool result output.
-pub fn print_tool_result(tool_use_id: &str, content: &str, is_error: bool) {
-    let id_short = truncate(tool_use_id, 12);
-    let content_short = truncate(content, 150);
+pub fn print_tool_result(tool_use_id: &str, content: &str, is_error: bool, raw_mode: bool) {
+    let id_short = truncate(tool_use_id, 12, raw_mode);
+    let content_short = truncate(content, 150, raw_mode);
     if is_error {
         println!(
             "{} {} {}",
@@ -236,30 +240,47 @@ pub fn print_connection_test(provider: &str, model: &str, success: bool) {
     let _ = io::stdout().flush();
 }
 
+/// Print raw event output (for verbose/raw mode).
+pub fn print_raw_event(event_type: &str, event_json: &str) {
+    println!(
+        "{} {} {}",
+        timestamp().dimmed(),
+        format!("[{event_type}]").yellow().bold(),
+        event_json
+    );
+    let _ = io::stdout().flush();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_truncate_short_string() {
-        assert_eq!(truncate("hello", 10), "hello");
+        assert_eq!(truncate("hello", 10, false), "hello");
     }
 
     #[test]
     fn test_truncate_exact_length() {
-        assert_eq!(truncate("hello", 5), "hello");
+        assert_eq!(truncate("hello", 5, false), "hello");
     }
 
     #[test]
     fn test_truncate_long_string() {
-        assert_eq!(truncate("hello world", 8), "hello...");
+        assert_eq!(truncate("hello world", 8, false), "hello...");
     }
 
     #[test]
     fn test_truncate_very_short_max() {
-        assert_eq!(truncate("hello", 3), "...");
-        assert_eq!(truncate("hello", 2), "...");
-        assert_eq!(truncate("hello", 0), "...");
+        assert_eq!(truncate("hello", 3, false), "...");
+        assert_eq!(truncate("hello", 2, false), "...");
+        assert_eq!(truncate("hello", 0, false), "...");
+    }
+
+    #[test]
+    fn test_truncate_raw_mode_no_truncation() {
+        let long_string = "a".repeat(200);
+        assert_eq!(truncate(&long_string, 10, true), long_string);
     }
 
     #[test]
@@ -268,7 +289,7 @@ mod tests {
             "file_path": "/home/user/test.txt",
             "content": "hello"
         });
-        let formatted = format_tool_input(&input);
+        let formatted = format_tool_input(&input, false);
         assert!(formatted.contains("file_path="));
         assert!(formatted.contains("content="));
     }
@@ -279,7 +300,7 @@ mod tests {
         let input = serde_json::json!({
             "content": long_content
         });
-        let formatted = format_tool_input(&input);
+        let formatted = format_tool_input(&input, false);
         assert!(formatted.len() < 100);
         assert!(formatted.contains("..."));
     }
@@ -287,22 +308,33 @@ mod tests {
     #[test]
     fn test_format_tool_input_non_object() {
         let input = serde_json::json!("just a string");
-        let formatted = format_tool_input(&input);
+        let formatted = format_tool_input(&input, false);
         assert!(formatted.contains("just a string"));
     }
 
     #[test]
     fn test_format_tool_input_number() {
         let input = serde_json::json!(42);
-        let formatted = format_tool_input(&input);
+        let formatted = format_tool_input(&input, false);
         assert_eq!(formatted, "42");
     }
 
     #[test]
     fn test_print_tool_result_truncates_long_content() {
         let long_content = "a".repeat(200);
-        let truncated = truncate(&long_content, 150);
+        let truncated = truncate(&long_content, 150, false);
         assert!(truncated.len() <= 150);
         assert!(truncated.ends_with("..."));
+    }
+
+    #[test]
+    fn test_format_tool_input_raw_mode_no_truncation() {
+        let long_content = "a".repeat(100);
+        let input = serde_json::json!({
+            "content": long_content.clone()
+        });
+        let formatted = format_tool_input(&input, true);
+        assert!(formatted.contains(&long_content));
+        assert!(!formatted.contains("..."));
     }
 }

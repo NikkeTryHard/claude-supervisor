@@ -76,6 +76,9 @@ enum Commands {
         /// Cleanup worktree after session ends.
         #[arg(long)]
         worktree_cleanup: bool,
+        /// Output raw untruncated events (verbose mode).
+        #[arg(long)]
+        raw: bool,
     },
     /// Install hooks into Claude Code settings.
     InstallHooks,
@@ -609,6 +612,9 @@ async fn handle_run(
     // Set task context
     supervisor.set_task(&prompt);
 
+    // Set raw mode if configured
+    supervisor.set_raw_mode(config.raw_mode);
+
     // Initialize knowledge from working directory (worktree or current)
     let cwd = std::env::current_dir()?;
     let knowledge_dir = working_dir.clone().unwrap_or_else(|| cwd.clone());
@@ -670,6 +676,7 @@ async fn main() {
             worktree,
             worktree_dir,
             worktree_cleanup,
+            raw,
         } => {
             // Validate: either task or resume must be provided
             if task.is_none() && resume.is_none() {
@@ -680,6 +687,7 @@ async fn main() {
             let mut config = SupervisorConfig {
                 policy: policy.into(),
                 auto_continue,
+                raw_mode: raw,
                 ..Default::default()
             };
 

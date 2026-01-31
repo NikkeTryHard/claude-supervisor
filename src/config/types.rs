@@ -105,7 +105,7 @@ impl Default for SupervisorConfig {
             stop: StopConfig::default(),
             worktree: WorktreeConfig::default(),
             show_activity: false,
-            raw_mode: false,
+            raw_mode: true,
         }
     }
 }

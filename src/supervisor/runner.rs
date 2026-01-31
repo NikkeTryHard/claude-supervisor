@@ -112,7 +112,7 @@ impl Supervisor {
             task: None,
             knowledge: None,
             cancel: None,
-            raw_mode: false,
+            raw_mode: true,
         }
     }
 
@@ -135,7 +135,7 @@ impl Supervisor {
             task: None,
             knowledge: None,
             cancel: None,
-            raw_mode: false,
+            raw_mode: true,
         }
     }
 
@@ -158,7 +158,7 @@ impl Supervisor {
             task: None,
             knowledge: None,
             cancel: None,
-            raw_mode: false,
+            raw_mode: true,
         }
     }
 
@@ -182,7 +182,7 @@ impl Supervisor {
             task: None,
             knowledge: None,
             cancel: None,
-            raw_mode: false,
+            raw_mode: true,
         }
     }
 
@@ -215,7 +215,7 @@ impl Supervisor {
             task: None,
             knowledge: None,
             cancel: None,
-            raw_mode: false,
+            raw_mode: true,
         })
     }
 
@@ -244,7 +244,7 @@ impl Supervisor {
             task: None,
             knowledge: None,
             cancel: None,
-            raw_mode: false,
+            raw_mode: true,
         })
     }
 

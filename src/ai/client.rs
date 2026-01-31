@@ -64,6 +64,8 @@ pub enum SupervisorDecision {
 pub enum AiError {
     #[error("API key not configured (env: {0})")]
     MissingApiKey(String),
+    #[error("Invalid configuration: {0}")]
+    InvalidConfig(String),
     #[error("API request failed: {0}")]
     RequestFailed(String),
     #[error("Failed to parse response: {0}")]
@@ -631,5 +633,11 @@ mod tests {
         assert_eq!(config.max_tokens, 1024);
         assert_eq!(config.base_url, "https://api.example.com");
         assert_eq!(config.api_key, "test-key");
+    }
+
+    #[test]
+    fn test_invalid_config_error_display() {
+        let error = AiError::InvalidConfig("bad url".to_string());
+        assert!(error.to_string().contains("bad url"));
     }
 }

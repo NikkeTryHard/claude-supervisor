@@ -119,6 +119,7 @@ impl ClaudeProcessBuilder {
             self.prompt.clone(),
             "--output-format".to_string(),
             "stream-json".to_string(),
+            "--verbose".to_string(), // Required for stream-json with -p
         ];
 
         if let Some(tools) = &self.allowed_tools {
@@ -177,8 +178,18 @@ impl ClaudeProcess {
     ) -> Result<Self, SpawnError> {
         let args = builder.build_args();
 
-        let mut cmd = Command::new(binary);
-        cmd.args(&args)
+        // Use 'script' to provide a PTY - required for stream-json output
+        let claude_cmd = format!(
+            "{} {}",
+            binary,
+            args.iter()
+                .map(|a| shell_escape::escape(a.into()))
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+
+        let mut cmd = Command::new("script");
+        cmd.args(["-q", "-c", &claude_cmd, "/dev/null"])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 

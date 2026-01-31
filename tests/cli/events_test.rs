@@ -245,6 +245,11 @@ fn session_id_for_system_init() {
         session_id: "session_abc".to_string(),
         mcp_servers: vec![],
         subtype: Some("init".to_string()),
+        permission_mode: None,
+        claude_code_version: None,
+        agents: vec![],
+        skills: vec![],
+        slash_commands: vec![],
     });
     assert_eq!(event.session_id(), Some("session_abc"));
 }

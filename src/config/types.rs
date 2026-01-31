@@ -46,7 +46,7 @@ fn default_max_tokens() -> u32 {
 }
 
 fn default_base_url() -> String {
-    "http://127.0.0.1:8045/v1beta".to_string()
+    "http://host.docker.internal:8045/v1beta".to_string()
 }
 
 fn default_api_key_env() -> String {
@@ -67,6 +67,7 @@ impl Default for AiConfig {
 
 /// Configuration for the supervisor.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct SupervisorConfig {
     #[serde(default)]
     pub policy: PolicyLevel,
@@ -82,6 +83,12 @@ pub struct SupervisorConfig {
     pub stop: StopConfig,
     #[serde(default)]
     pub worktree: WorktreeConfig,
+    /// Show detailed activity output.
+    #[serde(default)]
+    pub show_activity: bool,
+    /// Output raw untruncated events (verbose mode).
+    #[serde(default)]
+    pub raw_mode: bool,
 }
 
 impl Default for SupervisorConfig {
@@ -94,9 +101,11 @@ impl Default for SupervisorConfig {
                 .map(String::from)
                 .collect(),
             denied_tools: HashSet::new(),
-            ai_supervisor: false,
+            ai_supervisor: true,
             stop: StopConfig::default(),
             worktree: WorktreeConfig::default(),
+            show_activity: false,
+            raw_mode: false,
         }
     }
 }
@@ -111,7 +120,7 @@ mod tests {
         assert_eq!(config.provider, ProviderKind::Gemini);
         assert_eq!(config.model, "gemini-3-flash");
         assert_eq!(config.max_tokens, 65536);
-        assert_eq!(config.base_url, "http://127.0.0.1:8045/v1beta");
+        assert_eq!(config.base_url, "http://host.docker.internal:8045/v1beta");
         assert_eq!(config.api_key_env, "GEMINI_API_KEY");
     }
 
@@ -143,5 +152,11 @@ mod tests {
         assert_eq!(config.provider, ProviderKind::Claude);
         assert_eq!(config.model, "claude-sonnet-4-20250514");
         assert_eq!(config.base_url, "https://api.anthropic.com");
+    }
+
+    #[test]
+    fn test_supervisor_config_show_activity_default_false() {
+        let config = SupervisorConfig::default();
+        assert!(!config.show_activity);
     }
 }

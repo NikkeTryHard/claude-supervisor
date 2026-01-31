@@ -10,6 +10,7 @@ use claude_supervisor::ai::AiClient;
 use claude_supervisor::cli::{ClaudeProcess, ClaudeProcessBuilder, SpawnError};
 use claude_supervisor::commands::HookInstaller;
 use claude_supervisor::config::{ConfigLoader, PolicyConfig, SupervisorConfig, WorktreeConfig};
+use claude_supervisor::display;
 use claude_supervisor::hooks::HookHandler;
 use claude_supervisor::supervisor::{
     MultiSessionSupervisor, PolicyEngine, PolicyLevel, Supervisor, SupervisorResult,
@@ -75,6 +76,9 @@ enum Commands {
         /// Cleanup worktree after session ends.
         #[arg(long)]
         worktree_cleanup: bool,
+        /// Output raw untruncated events (verbose mode).
+        #[arg(long)]
+        raw: bool,
     },
     /// Install hooks into Claude Code settings.
     InstallHooks,
@@ -155,7 +159,6 @@ enum WorktreeAction {
 fn init_tracing(verbosity: u8) {
     let level = match verbosity {
         0 => "debug",
-        1 => "trace",
         _ => "trace",
     };
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(level));
@@ -587,6 +590,20 @@ async fn handle_run(
     let mut supervisor = if config.ai_supervisor {
         tracing::info!("AI supervision enabled");
         let ai_client = AiClient::from_env()?;
+
+        // Test AI provider connectivity before starting
+        let provider_name = format!("{:?}", ai_client.provider_kind());
+        let model = ai_client.model().to_string();
+        match ai_client.test_connection().await {
+            Ok(()) => {
+                display::print_connection_test(&provider_name, &model, true);
+            }
+            Err(e) => {
+                display::print_connection_test(&provider_name, &model, false);
+                return Err(format!("AI provider connection failed: {e}").into());
+            }
+        }
+
         Supervisor::from_process_with_ai(process, policy, ai_client)?
     } else {
         Supervisor::from_process(process, policy)?
@@ -594,6 +611,9 @@ async fn handle_run(
 
     // Set task context
     supervisor.set_task(&prompt);
+
+    // Set raw mode if configured
+    supervisor.set_raw_mode(config.raw_mode);
 
     // Initialize knowledge from working directory (worktree or current)
     let cwd = std::env::current_dir()?;
@@ -641,6 +661,7 @@ async fn handle_run(
 }
 
 #[tokio::main]
+#[allow(clippy::too_many_lines)]
 async fn main() {
     let cli = Cli::parse();
     init_tracing(cli.verbose);
@@ -655,6 +676,7 @@ async fn main() {
             worktree,
             worktree_dir,
             worktree_cleanup,
+            raw,
         } => {
             // Validate: either task or resume must be provided
             if task.is_none() && resume.is_none() {
@@ -665,6 +687,7 @@ async fn main() {
             let mut config = SupervisorConfig {
                 policy: policy.into(),
                 auto_continue,
+                raw_mode: raw,
                 ..Default::default()
             };
 

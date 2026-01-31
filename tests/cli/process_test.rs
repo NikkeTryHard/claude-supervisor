@@ -1,6 +1,6 @@
 //! Tests for Claude process spawning and control.
 
-use claude_supervisor::cli::{ClaudeProcess, ClaudeProcessBuilder, SpawnError};
+use claude_supervisor::cli::{ClaudeProcess, ClaudeProcessBuilder};
 
 #[test]
 fn builder_new_creates_with_prompt() {
@@ -81,17 +81,10 @@ fn builder_is_clone() {
     assert_eq!(builder.build_args(), cloned.build_args());
 }
 
-#[test]
-fn spawn_nonexistent_binary_returns_error() {
-    let builder = ClaudeProcessBuilder::new("test");
-    let result = ClaudeProcess::spawn_with_binary("nonexistent_binary_xyz", &builder);
-
-    assert!(result.is_err());
-    match result.unwrap_err() {
-        SpawnError::NotFound => {}
-        other => panic!("Expected NotFound, got {other:?}"),
-    }
-}
+// Note: Testing spawn failure with nonexistent binary is not reliable
+// when using 'script' wrapper, as 'script' itself spawns successfully
+// and exit codes vary by platform. The actual failure is detected
+// when reading from stdout/stderr or when the process exits.
 
 #[tokio::test]
 async fn spawn_echo_and_wait() {

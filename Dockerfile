@@ -43,6 +43,7 @@ RUN mkdir -p /home/claude/.claude \
     && mkdir -p /home/claude/.config/claude-supervisor \
     && chown -R claude:claude /home/claude/.claude /home/claude/.config
 COPY --chown=claude:claude config.example.toml /home/claude/.config/claude-supervisor/config.toml
+COPY --chown=claude:claude docker/claude-settings.json /home/claude/.claude/settings.json
 
 # Switch to claude user for Claude Code installation
 USER claude
@@ -57,6 +58,9 @@ ENV PATH="/home/claude/.local/bin:${PATH}"
 # Default environment
 ENV CLAUDE_HOME=/home/claude/.claude
 ENV RUST_LOG=info
+ENV TERM=xterm-256color
+ENV LANG=C.UTF-8
+ENV CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 
 # Expose dashboard port
 EXPOSE 3000

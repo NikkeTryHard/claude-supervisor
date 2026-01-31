@@ -47,6 +47,7 @@ fn all_event_types_exported() {
         is_error: false,
         cost_usd: None,
         duration_ms: None,
+        extras: std::collections::HashMap::new(),
     };
     assert_eq!(result.result, "done");
 }
@@ -89,6 +90,7 @@ fn helper_methods_work() {
         is_error: false,
         cost_usd: Some(0.05),
         duration_ms: Some(1000),
+        extras: std::collections::HashMap::new(),
     });
     assert!(result_event.is_terminal());
     assert!(ClaudeEvent::MessageStop.is_terminal());

@@ -215,6 +215,7 @@ fn is_terminal_for_result() {
         cost_usd: None,
         is_error: false,
         duration_ms: None,
+        extras: std::collections::HashMap::new(),
     });
     assert!(result.is_terminal());
 }
@@ -263,6 +264,7 @@ fn session_id_for_system_init() {
         agents: vec![],
         skills: vec![],
         slash_commands: vec![],
+        extras: std::collections::HashMap::new(),
     });
     assert_eq!(event.session_id(), Some("session_abc"));
 }
@@ -275,6 +277,7 @@ fn session_id_for_result() {
         is_error: false,
         cost_usd: None,
         duration_ms: None,
+        extras: std::collections::HashMap::new(),
     });
     assert_eq!(event.session_id(), Some("session_xyz"));
 }

@@ -4,6 +4,7 @@
 //! in non-interactive mode with `--output-format stream-json`.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// A Claude event with its original raw JSON preserved.
 ///
@@ -97,6 +98,9 @@ pub struct SystemInit {
     /// Slash commands.
     #[serde(default)]
     pub slash_commands: Vec<String>,
+    /// Extra fields not explicitly defined (forward compatibility).
+    #[serde(flatten, default)]
+    pub extras: HashMap<String, serde_json::Value>,
 }
 
 /// Tool use request data.
@@ -162,6 +166,9 @@ pub struct ResultEvent {
     /// Total duration in milliseconds.
     #[serde(default)]
     pub duration_ms: Option<u64>,
+    /// Extra fields not explicitly defined (forward compatibility).
+    #[serde(flatten, default)]
+    pub extras: HashMap<String, serde_json::Value>,
 }
 
 /// Events emitted by Claude Code in stream-json format.
@@ -253,6 +260,9 @@ impl Serialize for ClaudeEvent {
                 if !init.slash_commands.is_empty() {
                     map.serialize_entry("slash_commands", &init.slash_commands)?;
                 }
+                for (key, value) in &init.extras {
+                    map.serialize_entry(key, value)?;
+                }
                 map.end()
             }
             ClaudeEvent::Assistant { message } => {
@@ -334,6 +344,9 @@ impl Serialize for ClaudeEvent {
                 }
                 if let Some(duration) = result.duration_ms {
                     map.serialize_entry("duration_ms", &duration)?;
+                }
+                for (key, value) in &result.extras {
+                    map.serialize_entry(key, value)?;
                 }
                 map.end()
             }
@@ -535,5 +548,51 @@ mod tests {
         let json = r#"{"type":"new_streaming_type","data":"test"}"#;
         let event: ClaudeEvent = serde_json::from_str(json).unwrap();
         assert!(!event.is_terminal());
+    }
+
+    #[test]
+    fn test_system_init_captures_extras() {
+        let json = r#"{
+            "type": "system",
+            "cwd": "/tmp",
+            "tools": [],
+            "model": "test",
+            "session_id": "abc",
+            "mcp_servers": [],
+            "future_field": "captured",
+            "another_new_field": 123
+        }"#;
+        let event: ClaudeEvent = serde_json::from_str(json).unwrap();
+
+        match event {
+            ClaudeEvent::System(init) => {
+                assert!(init.extras.contains_key("future_field"));
+                assert!(init.extras.contains_key("another_new_field"));
+            }
+            _ => panic!("Expected System variant"),
+        }
+    }
+
+    #[test]
+    fn test_result_event_captures_extras() {
+        let json = r#"{
+            "type": "result",
+            "result": "done",
+            "session_id": "abc",
+            "is_error": false,
+            "subtype": "success",
+            "total_cost_usd": 0.05,
+            "usage": {"input_tokens": 100}
+        }"#;
+        let event: ClaudeEvent = serde_json::from_str(json).unwrap();
+
+        match event {
+            ClaudeEvent::Result(res) => {
+                assert!(res.extras.contains_key("subtype"));
+                assert!(res.extras.contains_key("total_cost_usd"));
+                assert!(res.extras.contains_key("usage"));
+            }
+            _ => panic!("Expected Result variant"),
+        }
     }
 }

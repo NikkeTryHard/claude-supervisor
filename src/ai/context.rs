@@ -273,6 +273,7 @@ mod tests {
             agents: vec![],
             skills: vec![],
             slash_commands: vec![],
+            extras: std::collections::HashMap::new(),
         })];
 
         let result = compressor.compress(&events);

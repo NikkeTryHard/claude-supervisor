@@ -81,6 +81,7 @@ async fn supervisor_processes_system_init() {
         agents: vec![],
         skills: vec![],
         slash_commands: vec![],
+        extras: std::collections::HashMap::new(),
     }))
     .await
     .unwrap();
@@ -162,6 +163,7 @@ async fn supervisor_handles_result_event() {
         is_error: false,
         cost_usd: Some(0.05),
         duration_ms: Some(5000),
+        extras: std::collections::HashMap::new(),
     }))
     .await
     .unwrap();
@@ -242,6 +244,7 @@ fn supervisor_result_from_result_event() {
         is_error: false,
         cost_usd: Some(0.10),
         duration_ms: Some(2000),
+        extras: std::collections::HashMap::new(),
     };
 
     let result = SupervisorResult::from_result_event(&event);

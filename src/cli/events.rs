@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// This wrapper stores the original JSON string alongside the parsed event,
 /// ensuring no information is lost during parsing.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RawClaudeEvent {
     /// The original JSON string.
     raw: String,
@@ -267,5 +267,28 @@ mod tests {
 
         assert_eq!(raw.raw(), json);
         assert!(raw.raw().contains("new_field"));
+    }
+
+    #[test]
+    fn test_into_event_consumes_wrapper() {
+        let json = r#"{"type":"message_stop"}"#;
+        let raw = RawClaudeEvent::parse(json).unwrap();
+        let event = raw.into_event();
+        assert!(matches!(event, ClaudeEvent::MessageStop));
+    }
+
+    #[test]
+    fn test_into_parts_returns_both() {
+        let json = r#"{"type":"message_stop"}"#;
+        let raw = RawClaudeEvent::parse(json).unwrap();
+        let (raw_json, event) = raw.into_parts();
+        assert_eq!(raw_json, json);
+        assert!(matches!(event, ClaudeEvent::MessageStop));
+    }
+
+    #[test]
+    fn test_parse_invalid_json_returns_error() {
+        let result = RawClaudeEvent::parse("not json");
+        assert!(result.is_err());
     }
 }

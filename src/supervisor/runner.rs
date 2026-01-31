@@ -657,6 +657,23 @@ impl Supervisor {
                 );
                 EventAction::Continue
             }
+            ClaudeEvent::User {
+                tool_use_result, ..
+            } => {
+                // User events contain tool results from Claude Code
+                if let Some(result_text) = tool_use_result {
+                    display::print_tool_result(
+                        "user",
+                        result_text,
+                        result_text.contains("error") || result_text.contains("Error"),
+                    );
+                    tracing::debug!(
+                        content_len = result_text.len(),
+                        "Tool result from user event"
+                    );
+                }
+                EventAction::Continue
+            }
             _ => EventAction::Continue,
         }
     }

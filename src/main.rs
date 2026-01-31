@@ -76,9 +76,6 @@ enum Commands {
         /// Cleanup worktree after session ends.
         #[arg(long)]
         worktree_cleanup: bool,
-        /// Show detailed activity (tool results, thinking).
-        #[arg(long)]
-        activity: bool,
     },
     /// Install hooks into Claude Code settings.
     InstallHooks,
@@ -673,7 +670,6 @@ async fn main() {
             worktree,
             worktree_dir,
             worktree_cleanup,
-            activity,
         } => {
             // Validate: either task or resume must be provided
             if task.is_none() && resume.is_none() {
@@ -701,11 +697,6 @@ async fn main() {
             }
             if worktree_cleanup {
                 config.worktree.auto_cleanup = true;
-            }
-
-            // Wire activity flag
-            if activity {
-                config.show_activity = true;
             }
 
             // Log based on task or resume mode

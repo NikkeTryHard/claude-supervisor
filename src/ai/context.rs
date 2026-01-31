@@ -90,6 +90,7 @@ impl ContextCompressor {
             | ClaudeEvent::ContentBlockStart { .. }
             | ClaudeEvent::ContentBlockStop { .. }
             | ClaudeEvent::ContentBlockDelta { .. }
+            | ClaudeEvent::User { .. }
             | ClaudeEvent::Unknown => String::new(),
         }
     }

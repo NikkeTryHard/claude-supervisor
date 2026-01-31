@@ -124,9 +124,17 @@ pub enum ClaudeEvent {
         /// Message content (flexible structure).
         message: serde_json::Value,
     },
+    /// User message event (contains tool results).
+    User {
+        /// Message content (flexible structure).
+        message: serde_json::Value,
+        /// Tool use result summary (if present).
+        #[serde(default)]
+        tool_use_result: Option<String>,
+    },
     /// Tool use request.
     ToolUse(ToolUse),
-    /// Tool execution result.
+    /// Tool execution result (legacy, kept for compatibility).
     ToolResult(ToolResult),
     /// Streaming content delta.
     ContentBlockDelta {

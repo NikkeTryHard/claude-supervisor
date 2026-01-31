@@ -165,8 +165,7 @@ pub struct ResultEvent {
 }
 
 /// Events emitted by Claude Code in stream-json format.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ClaudeEvent {
     /// System initialization event.
     System(SystemInit),
@@ -180,7 +179,6 @@ pub enum ClaudeEvent {
         /// Message content (flexible structure).
         message: serde_json::Value,
         /// Tool use result summary (if present, can be string or object).
-        #[serde(default)]
         tool_use_result: Option<serde_json::Value>,
     },
     /// Tool use request.
@@ -215,9 +213,234 @@ pub enum ClaudeEvent {
     MessageStop,
     /// Final result event.
     Result(ResultEvent),
-    /// Catch-all for unknown event types.
-    #[serde(other)]
-    Unknown,
+    /// Catch-all for unknown event types - preserves full JSON data.
+    Other(serde_json::Value),
+}
+
+impl Serialize for ClaudeEvent {
+    #[allow(clippy::too_many_lines)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeMap;
+
+        match self {
+            ClaudeEvent::System(init) => {
+                let mut map = serializer.serialize_map(None)?;
+                map.serialize_entry("type", "system")?;
+                // Serialize all SystemInit fields
+                map.serialize_entry("cwd", &init.cwd)?;
+                map.serialize_entry("tools", &init.tools)?;
+                map.serialize_entry("model", &init.model)?;
+                map.serialize_entry("session_id", &init.session_id)?;
+                map.serialize_entry("mcp_servers", &init.mcp_servers)?;
+                if let Some(ref subtype) = init.subtype {
+                    map.serialize_entry("subtype", subtype)?;
+                }
+                if let Some(ref permission_mode) = init.permission_mode {
+                    map.serialize_entry("permission_mode", permission_mode)?;
+                }
+                if let Some(ref version) = init.claude_code_version {
+                    map.serialize_entry("claude_code_version", version)?;
+                }
+                if !init.agents.is_empty() {
+                    map.serialize_entry("agents", &init.agents)?;
+                }
+                if !init.skills.is_empty() {
+                    map.serialize_entry("skills", &init.skills)?;
+                }
+                if !init.slash_commands.is_empty() {
+                    map.serialize_entry("slash_commands", &init.slash_commands)?;
+                }
+                map.end()
+            }
+            ClaudeEvent::Assistant { message } => {
+                let mut map = serializer.serialize_map(Some(2))?;
+                map.serialize_entry("type", "assistant")?;
+                map.serialize_entry("message", message)?;
+                map.end()
+            }
+            ClaudeEvent::User {
+                message,
+                tool_use_result,
+            } => {
+                let mut map = serializer.serialize_map(None)?;
+                map.serialize_entry("type", "user")?;
+                map.serialize_entry("message", message)?;
+                if let Some(ref result) = tool_use_result {
+                    map.serialize_entry("tool_use_result", result)?;
+                }
+                map.end()
+            }
+            ClaudeEvent::ToolUse(tool_use) => {
+                let mut map = serializer.serialize_map(Some(4))?;
+                map.serialize_entry("type", "tool_use")?;
+                map.serialize_entry("id", &tool_use.id)?;
+                map.serialize_entry("name", &tool_use.name)?;
+                map.serialize_entry("input", &tool_use.input)?;
+                map.end()
+            }
+            ClaudeEvent::ToolResult(result) => {
+                let mut map = serializer.serialize_map(Some(4))?;
+                map.serialize_entry("type", "tool_result")?;
+                map.serialize_entry("tool_use_id", &result.tool_use_id)?;
+                map.serialize_entry("content", &result.content)?;
+                map.serialize_entry("is_error", &result.is_error)?;
+                map.end()
+            }
+            ClaudeEvent::ContentBlockDelta { index, delta } => {
+                let mut map = serializer.serialize_map(Some(3))?;
+                map.serialize_entry("type", "content_block_delta")?;
+                map.serialize_entry("index", index)?;
+                map.serialize_entry("delta", delta)?;
+                map.end()
+            }
+            ClaudeEvent::ContentBlockStart {
+                index,
+                content_block,
+            } => {
+                let mut map = serializer.serialize_map(Some(3))?;
+                map.serialize_entry("type", "content_block_start")?;
+                map.serialize_entry("index", index)?;
+                map.serialize_entry("content_block", content_block)?;
+                map.end()
+            }
+            ClaudeEvent::ContentBlockStop { index } => {
+                let mut map = serializer.serialize_map(Some(2))?;
+                map.serialize_entry("type", "content_block_stop")?;
+                map.serialize_entry("index", index)?;
+                map.end()
+            }
+            ClaudeEvent::MessageStart { message } => {
+                let mut map = serializer.serialize_map(Some(2))?;
+                map.serialize_entry("type", "message_start")?;
+                map.serialize_entry("message", message)?;
+                map.end()
+            }
+            ClaudeEvent::MessageStop => {
+                let mut map = serializer.serialize_map(Some(1))?;
+                map.serialize_entry("type", "message_stop")?;
+                map.end()
+            }
+            ClaudeEvent::Result(result) => {
+                let mut map = serializer.serialize_map(None)?;
+                map.serialize_entry("type", "result")?;
+                map.serialize_entry("result", &result.result)?;
+                map.serialize_entry("session_id", &result.session_id)?;
+                map.serialize_entry("is_error", &result.is_error)?;
+                if let Some(cost) = result.cost_usd {
+                    map.serialize_entry("cost_usd", &cost)?;
+                }
+                if let Some(duration) = result.duration_ms {
+                    map.serialize_entry("duration_ms", &duration)?;
+                }
+                map.end()
+            }
+            ClaudeEvent::Other(value) => value.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ClaudeEvent {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = serde_json::Value::deserialize(deserializer)?;
+
+        let event_type = value.get("type").and_then(|t| t.as_str()).unwrap_or("");
+
+        match event_type {
+            "system" => {
+                let init: SystemInit =
+                    serde_json::from_value(value.clone()).map_err(serde::de::Error::custom)?;
+                Ok(ClaudeEvent::System(init))
+            }
+            "assistant" => {
+                let message = value
+                    .get("message")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
+                Ok(ClaudeEvent::Assistant { message })
+            }
+            "user" => {
+                let message = value
+                    .get("message")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
+                let tool_use_result = value.get("tool_use_result").cloned();
+                Ok(ClaudeEvent::User {
+                    message,
+                    tool_use_result,
+                })
+            }
+            "tool_use" => {
+                let tool_use: ToolUse =
+                    serde_json::from_value(value.clone()).map_err(serde::de::Error::custom)?;
+                Ok(ClaudeEvent::ToolUse(tool_use))
+            }
+            "tool_result" => {
+                let tool_result: ToolResult =
+                    serde_json::from_value(value.clone()).map_err(serde::de::Error::custom)?;
+                Ok(ClaudeEvent::ToolResult(tool_result))
+            }
+            "content_block_delta" => {
+                #[allow(clippy::cast_possible_truncation)]
+                let index = value
+                    .get("index")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0) as usize;
+                let delta: ContentDelta = value
+                    .get("delta")
+                    .cloned()
+                    .map_or(ContentDelta::Unknown, |d| {
+                        serde_json::from_value(d).unwrap_or(ContentDelta::Unknown)
+                    });
+                Ok(ClaudeEvent::ContentBlockDelta { index, delta })
+            }
+            "content_block_start" => {
+                #[allow(clippy::cast_possible_truncation)]
+                let index = value
+                    .get("index")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0) as usize;
+                let content_block = value
+                    .get("content_block")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
+                Ok(ClaudeEvent::ContentBlockStart {
+                    index,
+                    content_block,
+                })
+            }
+            "content_block_stop" => {
+                #[allow(clippy::cast_possible_truncation)]
+                let index = value
+                    .get("index")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0) as usize;
+                Ok(ClaudeEvent::ContentBlockStop { index })
+            }
+            "message_start" => {
+                let message = value
+                    .get("message")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
+                Ok(ClaudeEvent::MessageStart { message })
+            }
+            "message_stop" => Ok(ClaudeEvent::MessageStop),
+            "result" => {
+                let result: ResultEvent =
+                    serde_json::from_value(value.clone()).map_err(serde::de::Error::custom)?;
+                Ok(ClaudeEvent::Result(result))
+            }
+            _ => {
+                // Unknown type - preserve the entire JSON value
+                Ok(ClaudeEvent::Other(value))
+            }
+        }
+    }
 }
 
 impl ClaudeEvent {
@@ -290,5 +513,27 @@ mod tests {
     fn test_parse_invalid_json_returns_error() {
         let result = RawClaudeEvent::parse("not json");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_unknown_event_preserves_data() {
+        let json = r#"{"type":"future_event_type","data":"important","count":42}"#;
+        let event: ClaudeEvent = serde_json::from_str(json).unwrap();
+
+        match event {
+            ClaudeEvent::Other(value) => {
+                assert_eq!(value.get("type").unwrap(), "future_event_type");
+                assert_eq!(value.get("data").unwrap(), "important");
+                assert_eq!(value.get("count").unwrap(), 42);
+            }
+            _ => panic!("Expected Other variant"),
+        }
+    }
+
+    #[test]
+    fn test_other_is_not_terminal() {
+        let json = r#"{"type":"new_streaming_type","data":"test"}"#;
+        let event: ClaudeEvent = serde_json::from_str(json).unwrap();
+        assert!(!event.is_terminal());
     }
 }

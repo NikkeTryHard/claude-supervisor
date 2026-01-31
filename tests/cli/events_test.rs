@@ -171,11 +171,17 @@ fn parse_result_event() {
 }
 
 #[test]
-fn parse_unknown_event() {
+fn parse_unknown_event_as_other() {
     let json = r#"{"type":"some_future_event","data":"whatever"}"#;
     let event: ClaudeEvent = serde_json::from_str(json).unwrap();
 
-    assert!(matches!(event, ClaudeEvent::Unknown));
+    match event {
+        ClaudeEvent::Other(value) => {
+            assert_eq!(value.get("type").unwrap(), "some_future_event");
+            assert_eq!(value.get("data").unwrap(), "whatever");
+        }
+        _ => panic!("Expected Other variant"),
+    }
 }
 
 #[test]
@@ -186,10 +192,17 @@ fn parse_error_invalid_json() {
 }
 
 #[test]
-fn parse_error_missing_type() {
+fn parse_missing_type_becomes_other() {
     let json = r#"{"message":"no type field"}"#;
-    let result: Result<ClaudeEvent, _> = serde_json::from_str(json);
-    assert!(result.is_err());
+    let event: ClaudeEvent = serde_json::from_str(json).unwrap();
+
+    // Missing type field defaults to empty string, which becomes Other
+    match event {
+        ClaudeEvent::Other(value) => {
+            assert_eq!(value.get("message").unwrap(), "no type field");
+        }
+        _ => panic!("Expected Other variant for missing type"),
+    }
 }
 
 // Helper method tests

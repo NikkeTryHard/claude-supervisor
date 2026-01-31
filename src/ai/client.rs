@@ -72,9 +72,9 @@ pub enum AiError {
     Timeout,
 }
 
-/// Gemini API provider.
+/// Shared configuration for AI providers.
 #[derive(Debug, Clone)]
-pub struct GeminiProvider {
+struct ProviderConfig {
     client: Client,
     base_url: String,
     api_key: String,
@@ -82,16 +82,31 @@ pub struct GeminiProvider {
     max_tokens: u32,
 }
 
-impl GeminiProvider {
-    /// Create a new Gemini provider.
-    #[must_use]
-    pub fn new(base_url: String, api_key: String, model: String, max_tokens: u32) -> Self {
+impl ProviderConfig {
+    /// Create a new provider configuration.
+    fn new(base_url: String, api_key: String, model: String, max_tokens: u32) -> Self {
         Self {
             client: build_http_client(),
             base_url,
             api_key,
             model,
             max_tokens,
+        }
+    }
+}
+
+/// Gemini API provider.
+#[derive(Debug, Clone)]
+pub struct GeminiProvider {
+    config: ProviderConfig,
+}
+
+impl GeminiProvider {
+    /// Create a new Gemini provider.
+    #[must_use]
+    pub fn new(base_url: String, api_key: String, model: String, max_tokens: u32) -> Self {
+        Self {
+            config: ProviderConfig::new(base_url, api_key, model, max_tokens),
         }
     }
 }
@@ -107,8 +122,8 @@ impl GeminiProvider {
     pub async fn generate(&self, system: &str, user: &str) -> Result<String, AiError> {
         let url = format!(
             "{}/models/{}:generateContent",
-            self.base_url.trim_end_matches('/'),
-            self.model
+            self.config.base_url.trim_end_matches('/'),
+            self.config.model
         );
 
         let body = serde_json::json!({
@@ -120,16 +135,17 @@ impl GeminiProvider {
                 "parts": [{ "text": system }]
             },
             "generationConfig": {
-                "maxOutputTokens": self.max_tokens
+                "maxOutputTokens": self.config.max_tokens
             }
         });
 
         let mut attempt = 0;
         loop {
             let response = self
+                .config
                 .client
                 .post(&url)
-                .header("x-goog-api-key", &self.api_key)
+                .header("x-goog-api-key", &self.config.api_key)
                 .header("Content-Type", "application/json")
                 .json(&body)
                 .send()
@@ -451,8 +467,8 @@ mod tests {
             1024,
         );
         // Verify the provider is created with the configured client
-        assert_eq!(provider.model, "gemini-test");
-        assert_eq!(provider.max_tokens, 1024);
+        assert_eq!(provider.config.model, "gemini-test");
+        assert_eq!(provider.config.max_tokens, 1024);
     }
 
     #[test]
@@ -608,5 +624,19 @@ mod tests {
         assert!(matches!(client.provider, Provider::Claude(_)));
         assert_eq!(client.model(), "claude-sonnet-4-20250514");
         std::env::remove_var("TEST_CLAUDE_KEY");
+    }
+
+    #[test]
+    fn test_provider_config_creation() {
+        let config = ProviderConfig::new(
+            "https://api.example.com".to_string(),
+            "test-key".to_string(),
+            "test-model".to_string(),
+            1024,
+        );
+        assert_eq!(config.model, "test-model");
+        assert_eq!(config.max_tokens, 1024);
+        assert_eq!(config.base_url, "https://api.example.com");
+        assert_eq!(config.api_key, "test-key");
     }
 }

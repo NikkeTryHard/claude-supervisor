@@ -8,6 +8,7 @@ use std::io::{self, Write};
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::sync::mpsc::{self, Receiver, Sender};
 
+use crate::cli::events::RawClaudeEvent;
 use crate::cli::ClaudeEvent;
 
 /// Default buffer size for event channels.
@@ -64,6 +65,18 @@ impl StreamParser {
         })
     }
 
+    /// Parse a single line into a `RawClaudeEvent`, preserving the original JSON.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StreamError::ParseError` if the JSON is invalid.
+    pub fn parse_raw_line(line: &str) -> Result<RawClaudeEvent, StreamError> {
+        RawClaudeEvent::parse(line).map_err(|e| StreamError::ParseError {
+            input: line.to_string(),
+            reason: e.to_string(),
+        })
+    }
+
     /// Parse events from an async reader and send them to a channel.
     ///
     /// This function reads lines from the provided reader, parses them
@@ -106,6 +119,47 @@ impl StreamParser {
         Ok(())
     }
 
+    /// Parse events from an async reader and send `RawClaudeEvent`s to a channel.
+    ///
+    /// This preserves the original JSON for each event.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StreamError::ReadError` if reading fails.
+    /// Returns `StreamError::ChannelClosed` if the receiver is dropped.
+    pub async fn parse_stdout_raw<R>(
+        stdout: R,
+        tx: Sender<RawClaudeEvent>,
+    ) -> Result<(), StreamError>
+    where
+        R: AsyncRead + Unpin,
+    {
+        let reader = BufReader::new(stdout);
+        let mut lines = reader.lines();
+
+        while let Some(line) = lines.next_line().await.map_err(StreamError::ReadError)? {
+            if line.trim().is_empty() {
+                continue;
+            }
+
+            println!("{line}");
+            let _ = io::stdout().flush();
+
+            match Self::parse_raw_line(&line) {
+                Ok(raw_event) => {
+                    if tx.send(raw_event).await.is_err() {
+                        return Err(StreamError::ChannelClosed);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, line = %line, "Failed to parse stream line");
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Create a channel that receives parsed events from a reader.
     ///
     /// This spawns a background task that reads from the provided reader
@@ -132,5 +186,39 @@ impl StreamParser {
         });
 
         rx
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli::events::RawClaudeEvent;
+
+    #[tokio::test]
+    async fn test_parse_raw_line() {
+        let json = r#"{"type":"message_stop"}"#;
+        let raw = StreamParser::parse_raw_line(json).unwrap();
+
+        assert_eq!(raw.raw(), json);
+        assert!(matches!(raw.event(), ClaudeEvent::MessageStop));
+    }
+
+    #[tokio::test]
+    async fn test_parse_stdout_raw_preserves_json() {
+        use tokio::sync::mpsc;
+
+        let json_lines = r#"{"type":"message_stop"}
+{"type":"result","result":"done","session_id":"abc","is_error":false}"#;
+
+        let cursor = std::io::Cursor::new(json_lines);
+        let (tx, mut rx) = mpsc::channel::<RawClaudeEvent>(10);
+
+        StreamParser::parse_stdout_raw(cursor, tx).await.unwrap();
+
+        let event1 = rx.recv().await.unwrap();
+        assert!(event1.raw().contains("message_stop"));
+
+        let event2 = rx.recv().await.unwrap();
+        assert!(event2.raw().contains("session_id"));
     }
 }

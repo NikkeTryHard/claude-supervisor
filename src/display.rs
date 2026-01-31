@@ -5,7 +5,13 @@
 
 use std::io::{self, Write};
 
+use chrono::Utc;
 use owo_colors::OwoColorize;
+
+/// Get current timestamp in the same format as tracing.
+fn timestamp() -> String {
+    Utc::now().format("%Y-%m-%dT%H:%M:%S%.6fZ").to_string()
+}
 
 /// Maximum length for truncated display strings.
 const DEFAULT_MAX_LEN: usize = 80;
@@ -46,7 +52,8 @@ pub fn format_tool_input(input: &serde_json::Value) -> String {
 /// Print session start information.
 pub fn print_session_start(model: &str, session_id: &str) {
     println!(
-        "{} model={}, session={}",
+        "{} {} model={}, session={}",
+        timestamp().dimmed(),
         "[SESSION]".blue().bold(),
         model.cyan(),
         truncate(session_id, 20).dimmed()
@@ -55,17 +62,31 @@ pub fn print_session_start(model: &str, session_id: &str) {
 }
 
 /// Print session end information.
-pub fn print_session_end(cost_usd: Option<f64>, is_error: bool) {
+pub fn print_session_end(cost_usd: Option<f64>, is_error: bool, session_id: Option<&str>) {
+    let ts = timestamp();
     if is_error {
-        println!("{} Session ended with error", "[SESSION]".red().bold());
+        println!(
+            "{} {} Session ended with error {}",
+            ts.dimmed(),
+            "[SESSION]".red().bold(),
+            session_id.map_or("".to_string(), |id| format!("session_id={}", truncate(id, 20))).dimmed()
+        );
+        tracing::debug!("Session ended with is_error=true. Check Claude Code logs for details.");
     } else if let Some(cost) = cost_usd {
         println!(
-            "{} Session completed (cost: ${:.4})",
+            "{} {} Session completed (cost: ${:.4}) {}",
+            ts.dimmed(),
             "[SESSION]".blue().bold(),
-            cost
+            cost,
+            session_id.map_or("".to_string(), |id| format!("session_id={}", truncate(id, 20))).dimmed()
         );
     } else {
-        println!("{} Session completed", "[SESSION]".blue().bold());
+        println!(
+            "{} {} Session completed {}",
+            ts.dimmed(),
+            "[SESSION]".blue().bold(),
+            session_id.map_or("".to_string(), |id| format!("session_id={}", truncate(id, 20))).dimmed()
+        );
     }
     let _ = io::stdout().flush();
 }

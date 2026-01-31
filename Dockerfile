@@ -29,27 +29,30 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     curl \
     git \
-    nodejs \
-    npm \
+    ripgrep \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Claude Code CLI
-RUN npm install -g @anthropic-ai/claude-code
+# Copy supervisor binary (must happen as root)
+COPY --from=builder /app/target/release/claude-supervisor /usr/local/bin/
 
 # Create non-root user
 RUN useradd -m -s /bin/bash claude
+
+# Create directories and copy config (as root, then chown)
+RUN mkdir -p /home/claude/.claude \
+    && mkdir -p /home/claude/.config/claude-supervisor \
+    && chown -R claude:claude /home/claude/.claude /home/claude/.config
+COPY --chown=claude:claude config.example.toml /home/claude/.config/claude-supervisor/config.toml
+
+# Switch to claude user for Claude Code installation
 USER claude
 WORKDIR /home/claude
 
-# Create isolated .claude directory
-RUN mkdir -p /home/claude/.claude \
-    && mkdir -p /home/claude/.config/claude-supervisor
+# Install Claude Code CLI (native installer - installs to ~/.claude/bin)
+RUN curl -fsSL https://claude.ai/install.sh | bash
 
-# Copy binary from builder
-COPY --from=builder /app/target/release/claude-supervisor /usr/local/bin/
-
-# Copy example config
-COPY --chown=claude:claude config.example.toml /home/claude/.config/claude-supervisor/config.toml
+# Add Claude Code to PATH (native installer uses ~/.local/bin)
+ENV PATH="/home/claude/.local/bin:${PATH}"
 
 # Default environment
 ENV CLAUDE_HOME=/home/claude/.claude

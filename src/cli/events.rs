@@ -5,6 +5,15 @@
 
 use serde::{Deserialize, Serialize};
 
+/// MCP server status.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct McpServer {
+    /// Server name.
+    pub name: String,
+    /// Connection status.
+    pub status: String,
+}
+
 /// System initialization event data.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SystemInit {
@@ -18,10 +27,25 @@ pub struct SystemInit {
     pub session_id: String,
     /// MCP servers available.
     #[serde(default)]
-    pub mcp_servers: Vec<String>,
+    pub mcp_servers: Vec<McpServer>,
     /// Event subtype (e.g., "init").
     #[serde(default)]
     pub subtype: Option<String>,
+    /// Permission mode.
+    #[serde(default)]
+    pub permission_mode: Option<String>,
+    /// Claude Code version.
+    #[serde(default)]
+    pub claude_code_version: Option<String>,
+    /// Available agents.
+    #[serde(default)]
+    pub agents: Vec<String>,
+    /// Available skills.
+    #[serde(default)]
+    pub skills: Vec<String>,
+    /// Slash commands.
+    #[serde(default)]
+    pub slash_commands: Vec<String>,
 }
 
 /// Tool use request data.

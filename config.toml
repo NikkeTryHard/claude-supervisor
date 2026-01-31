@@ -18,7 +18,7 @@ provider = "gemini"
 model = "gemini-3-flash"
 
 # Base URL for the API
-base_url = "http://host.docker.internal:8045/v1beta"
+base_url = "http://127.0.0.1:8045/v1beta"
 
 # Environment variable containing the API key
 api_key_env = "GEMINI_API_KEY"

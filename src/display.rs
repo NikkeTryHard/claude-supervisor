@@ -62,7 +62,7 @@ pub fn print_session_start(model: &str, session_id: &str) {
 }
 
 /// Print session end information.
-pub fn print_session_end(cost_usd: Option<f64>, is_error: bool, session_id: Option<&str>) {
+pub fn print_session_end(cost_usd: Option<f64>, is_error: bool, session_id: Option<&str>, result_msg: Option<&str>) {
     let ts = timestamp();
     if is_error {
         println!(
@@ -71,6 +71,16 @@ pub fn print_session_end(cost_usd: Option<f64>, is_error: bool, session_id: Opti
             "[SESSION]".red().bold(),
             session_id.map_or("".to_string(), |id| format!("session_id={}", truncate(id, 20))).dimmed()
         );
+        if let Some(msg) = result_msg {
+            if !msg.is_empty() {
+                println!(
+                    "{} {} {}",
+                    ts.dimmed(),
+                    "[ERROR]".red().bold(),
+                    truncate(msg, 200).red()
+                );
+            }
+        }
         tracing::debug!("Session ended with is_error=true. Check Claude Code logs for details.");
     } else if let Some(cost) = cost_usd {
         println!(

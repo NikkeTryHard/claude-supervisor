@@ -617,7 +617,12 @@ impl Supervisor {
                 self.evaluate_tool_use(tool_use)
             }
             ClaudeEvent::Result(result) => {
-                display::print_session_end(result.cost_usd, result.is_error, Some(&result.session_id));
+                display::print_session_end(
+                    result.cost_usd,
+                    result.is_error,
+                    Some(&result.session_id),
+                    Some(&result.result),
+                );
                 tracing::info!(
                     session_id = %result.session_id,
                     cost_usd = ?result.cost_usd,

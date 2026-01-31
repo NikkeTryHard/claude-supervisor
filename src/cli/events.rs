@@ -15,7 +15,7 @@ pub struct McpServer {
 }
 
 /// System initialization event data.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct SystemInit {
     /// Current working directory.
     pub cwd: String,

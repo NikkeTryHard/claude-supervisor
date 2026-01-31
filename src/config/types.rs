@@ -111,7 +111,7 @@ mod tests {
         assert_eq!(config.provider, ProviderKind::Gemini);
         assert_eq!(config.model, "gemini-3-flash");
         assert_eq!(config.max_tokens, 65536);
-        assert_eq!(config.base_url, "http://127.0.0.1:8045/v1beta");
+        assert_eq!(config.base_url, "http://host.docker.internal:8045/v1beta");
         assert_eq!(config.api_key_env, "GEMINI_API_KEY");
     }
 

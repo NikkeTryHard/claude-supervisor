@@ -189,11 +189,7 @@ impl GeminiProvider {
 /// Claude API provider.
 #[derive(Debug, Clone)]
 pub struct ClaudeProvider {
-    client: Client,
-    base_url: String,
-    api_key: String,
-    model: String,
-    max_tokens: u32,
+    config: ProviderConfig,
 }
 
 impl ClaudeProvider {
@@ -201,11 +197,7 @@ impl ClaudeProvider {
     #[must_use]
     pub fn new(base_url: String, api_key: String, model: String, max_tokens: u32) -> Self {
         Self {
-            client: build_http_client(),
-            base_url,
-            api_key,
-            model,
-            max_tokens,
+            config: ProviderConfig::new(base_url, api_key, model, max_tokens),
         }
     }
 }
@@ -219,11 +211,11 @@ impl ClaudeProvider {
     /// Returns `AiError::RequestFailed` if the API request fails.
     /// Returns `AiError::ParseError` if the response cannot be parsed.
     pub async fn generate(&self, system: &str, user: &str) -> Result<String, AiError> {
-        let url = format!("{}/v1/messages", self.base_url.trim_end_matches('/'));
+        let url = format!("{}/v1/messages", self.config.base_url.trim_end_matches('/'));
 
         let body = serde_json::json!({
-            "model": self.model,
-            "max_tokens": self.max_tokens,
+            "model": self.config.model,
+            "max_tokens": self.config.max_tokens,
             "system": system,
             "messages": [{
                 "role": "user",
@@ -234,9 +226,10 @@ impl ClaudeProvider {
         let mut attempt = 0;
         loop {
             let response = self
+                .config
                 .client
                 .post(&url)
-                .header("x-api-key", &self.api_key)
+                .header("x-api-key", &self.config.api_key)
                 .header("anthropic-version", DEFAULT_ANTHROPIC_VERSION)
                 .header("Content-Type", "application/json")
                 .json(&body)
@@ -480,8 +473,8 @@ mod tests {
             2048,
         );
         // Verify the provider is created with the configured client
-        assert_eq!(provider.model, "claude-test");
-        assert_eq!(provider.max_tokens, 2048);
+        assert_eq!(provider.config.model, "claude-test");
+        assert_eq!(provider.config.max_tokens, 2048);
     }
 
     #[tokio::test]

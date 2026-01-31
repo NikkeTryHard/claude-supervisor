@@ -67,6 +67,7 @@ impl Default for AiConfig {
 
 /// Configuration for the supervisor.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct SupervisorConfig {
     #[serde(default)]
     pub policy: PolicyLevel,
@@ -85,6 +86,9 @@ pub struct SupervisorConfig {
     /// Show detailed activity output.
     #[serde(default)]
     pub show_activity: bool,
+    /// Output raw untruncated events (verbose mode).
+    #[serde(default)]
+    pub raw_mode: bool,
 }
 
 impl Default for SupervisorConfig {
@@ -101,6 +105,7 @@ impl Default for SupervisorConfig {
             stop: StopConfig::default(),
             worktree: WorktreeConfig::default(),
             show_activity: false,
+            raw_mode: false,
         }
     }
 }

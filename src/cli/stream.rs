@@ -85,6 +85,9 @@ impl StreamParser {
                 continue;
             }
 
+            // Print raw JSON line for verbose output
+            println!("{line}");
+
             match Self::parse_line(&line) {
                 Ok(event) => {
                     if tx.send(event).await.is_err() {

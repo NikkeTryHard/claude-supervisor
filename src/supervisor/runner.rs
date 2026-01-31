@@ -664,10 +664,15 @@ impl Supervisor {
                 }
                 EventAction::Continue
             }
-            ClaudeEvent::MessageStop => EventAction::Complete(SupervisorResult::Completed {
-                session_id: self.session_id.clone(),
-                cost_usd: None,
-            }),
+            ClaudeEvent::MessageStop => {
+                if self.raw_mode {
+                    display::print_raw_event("MESSAGE_STOP", "{}");
+                }
+                EventAction::Complete(SupervisorResult::Completed {
+                    session_id: self.session_id.clone(),
+                    cost_usd: None,
+                })
+            }
             ClaudeEvent::ToolResult(result) => {
                 display::print_tool_result(
                     &result.tool_use_id,

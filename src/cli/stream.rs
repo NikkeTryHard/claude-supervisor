@@ -3,6 +3,8 @@
 //! This module provides utilities for parsing the stream-json output
 //! from Claude Code and routing events through channels.
 
+use std::io::{self, Write};
+
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::sync::mpsc::{self, Receiver, Sender};
 
@@ -87,6 +89,7 @@ impl StreamParser {
 
             // Print raw JSON line for verbose output
             println!("{line}");
+            let _ = io::stdout().flush();
 
             match Self::parse_line(&line) {
                 Ok(event) => {

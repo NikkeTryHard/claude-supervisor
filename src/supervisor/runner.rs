@@ -12,8 +12,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::ai::{AiClient, AiError, ContextCompressor, SupervisorContext, SupervisorDecision};
 use crate::cli::{
-    ClaudeEvent, ClaudeProcess, ContentDelta, ResultEvent, StreamParser, ToolUse,
-    DEFAULT_CHANNEL_BUFFER,
+    ClaudeEvent, ClaudeProcess, ResultEvent, StreamParser, ToolUse, DEFAULT_CHANNEL_BUFFER,
 };
 use crate::display;
 use crate::knowledge::{
@@ -601,6 +600,12 @@ impl Supervisor {
     /// Handle a single event and return the action to take.
     #[allow(clippy::too_many_lines)]
     fn handle_event(&mut self, event: &ClaudeEvent) -> EventAction {
+        // ALWAYS print raw JSON for every event
+        if let Ok(json) = serde_json::to_string(event) {
+            println!("{json}");
+            let _ = std::io::Write::flush(&mut std::io::stdout());
+        }
+
         // Store event in history
         self.event_history.push_back(event.clone());
         if self.event_history.len() > MAX_EVENT_HISTORY {
@@ -615,7 +620,6 @@ impl Supervisor {
         match event {
             ClaudeEvent::System(init) => {
                 self.cwd = Some(init.cwd.clone());
-                display::print_session_start(&init.model, &init.session_id, self.raw_mode);
                 tracing::info!(
                     session_id = %init.session_id,
                     model = %init.model,
@@ -626,17 +630,9 @@ impl Supervisor {
             }
             ClaudeEvent::ToolUse(tool_use) => {
                 self.state.record_tool_call();
-                display::print_tool_request(&tool_use.name, &tool_use.input, self.raw_mode);
                 self.evaluate_tool_use(tool_use)
             }
             ClaudeEvent::Result(result) => {
-                display::print_session_end(
-                    result.cost_usd,
-                    result.is_error,
-                    Some(&result.session_id),
-                    Some(&result.result),
-                    self.raw_mode,
-                );
                 tracing::info!(
                     session_id = %result.session_id,
                     cost_usd = ?result.cost_usd,
@@ -645,41 +641,11 @@ impl Supervisor {
                 );
                 EventAction::Complete(SupervisorResult::from_result_event(result))
             }
-            ClaudeEvent::ContentBlockDelta { delta, .. } => {
-                match delta {
-                    ContentDelta::ThinkingDelta { thinking } => {
-                        display::print_thinking(thinking);
-                    }
-                    ContentDelta::TextDelta { text } => {
-                        display::print_text(text);
-                    }
-                    other => {
-                        if self.raw_mode {
-                            display::print_raw_event(
-                                "DELTA",
-                                &serde_json::to_string(other).unwrap_or_default(),
-                            );
-                        }
-                    }
-                }
-                EventAction::Continue
-            }
-            ClaudeEvent::MessageStop => {
-                if self.raw_mode {
-                    display::print_raw_event("MESSAGE_STOP", "{}");
-                }
-                EventAction::Complete(SupervisorResult::Completed {
-                    session_id: self.session_id.clone(),
-                    cost_usd: None,
-                })
-            }
+            ClaudeEvent::MessageStop => EventAction::Complete(SupervisorResult::Completed {
+                session_id: self.session_id.clone(),
+                cost_usd: None,
+            }),
             ClaudeEvent::ToolResult(result) => {
-                display::print_tool_result(
-                    &result.tool_use_id,
-                    &result.content,
-                    result.is_error,
-                    self.raw_mode,
-                );
                 tracing::debug!(
                     tool_use_id = %result.tool_use_id,
                     is_error = result.is_error,
@@ -688,33 +654,7 @@ impl Supervisor {
                 );
                 EventAction::Continue
             }
-            ClaudeEvent::User {
-                tool_use_result, ..
-            } => {
-                // User events contain tool results from Claude Code
-                if let Some(result_value) = tool_use_result {
-                    let result_text = match &result_value {
-                        serde_json::Value::String(s) => s.clone(),
-                        other => other.to_string(),
-                    };
-                    let is_error = result_text.contains("error") || result_text.contains("Error");
-                    display::print_tool_result("user", &result_text, is_error, self.raw_mode);
-                    tracing::debug!(
-                        content_len = result_text.len(),
-                        "Tool result from user event"
-                    );
-                }
-                EventAction::Continue
-            }
-            other => {
-                if self.raw_mode {
-                    display::print_raw_event(
-                        "EVENT",
-                        &serde_json::to_string(other).unwrap_or_default(),
-                    );
-                }
-                EventAction::Continue
-            }
+            _ => EventAction::Continue,
         }
     }
 

@@ -154,9 +154,8 @@ enum WorktreeAction {
 
 fn init_tracing(verbosity: u8) {
     let level = match verbosity {
-        0 => "warn",
-        1 => "info",
-        2 => "debug",
+        0 => "debug",
+        1 => "trace",
         _ => "trace",
     };
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(level));

@@ -6,6 +6,7 @@ use reqwest::Client;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use url::Url;
 
 use crate::config::{AiConfig, ProviderKind};
 
@@ -86,14 +87,27 @@ struct ProviderConfig {
 
 impl ProviderConfig {
     /// Create a new provider configuration.
-    fn new(base_url: String, api_key: String, model: String, max_tokens: u32) -> Self {
-        Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns `AiError::InvalidConfig` if the `base_url` is not a valid URL.
+    fn new(
+        base_url: String,
+        api_key: String,
+        model: String,
+        max_tokens: u32,
+    ) -> Result<Self, AiError> {
+        // Validate URL format
+        Url::parse(&base_url)
+            .map_err(|e| AiError::InvalidConfig(format!("Invalid base_url '{base_url}': {e}")))?;
+
+        Ok(Self {
             client: build_http_client(),
             base_url,
             api_key,
             model,
             max_tokens,
-        }
+        })
     }
 }
 
@@ -105,11 +119,19 @@ pub struct GeminiProvider {
 
 impl GeminiProvider {
     /// Create a new Gemini provider.
-    #[must_use]
-    pub fn new(base_url: String, api_key: String, model: String, max_tokens: u32) -> Self {
-        Self {
-            config: ProviderConfig::new(base_url, api_key, model, max_tokens),
-        }
+    ///
+    /// # Errors
+    ///
+    /// Returns `AiError::InvalidConfig` if the `base_url` is not a valid URL.
+    pub fn new(
+        base_url: String,
+        api_key: String,
+        model: String,
+        max_tokens: u32,
+    ) -> Result<Self, AiError> {
+        Ok(Self {
+            config: ProviderConfig::new(base_url, api_key, model, max_tokens)?,
+        })
     }
 }
 
@@ -196,11 +218,19 @@ pub struct ClaudeProvider {
 
 impl ClaudeProvider {
     /// Create a new Claude provider.
-    #[must_use]
-    pub fn new(base_url: String, api_key: String, model: String, max_tokens: u32) -> Self {
-        Self {
-            config: ProviderConfig::new(base_url, api_key, model, max_tokens),
-        }
+    ///
+    /// # Errors
+    ///
+    /// Returns `AiError::InvalidConfig` if the `base_url` is not a valid URL.
+    pub fn new(
+        base_url: String,
+        api_key: String,
+        model: String,
+        max_tokens: u32,
+    ) -> Result<Self, AiError> {
+        Ok(Self {
+            config: ProviderConfig::new(base_url, api_key, model, max_tokens)?,
+        })
     }
 }
 
@@ -316,6 +346,7 @@ impl AiClient {
     ///
     /// Returns `AiError::MissingApiKey` if the configured API key environment
     /// variable is not set.
+    /// Returns `AiError::InvalidConfig` if the `base_url` is not a valid URL.
     pub fn from_config(config: AiConfig) -> Result<Self, AiError> {
         let api_key = std::env::var(&config.api_key_env)
             .map_err(|_| AiError::MissingApiKey(config.api_key_env.clone()))?;
@@ -326,13 +357,13 @@ impl AiClient {
                 api_key,
                 config.model.clone(),
                 config.max_tokens,
-            )),
+            )?),
             ProviderKind::Claude => Provider::Claude(ClaudeProvider::new(
                 config.base_url.clone(),
                 api_key,
                 config.model.clone(),
                 config.max_tokens,
-            )),
+            )?),
         };
 
         Ok(Self { provider, config })
@@ -460,7 +491,8 @@ mod tests {
             "test-key".to_string(),
             "gemini-test".to_string(),
             1024,
-        );
+        )
+        .expect("valid URL should succeed");
         // Verify the provider is created with the configured client
         assert_eq!(provider.config.model, "gemini-test");
         assert_eq!(provider.config.max_tokens, 1024);
@@ -473,7 +505,8 @@ mod tests {
             "test-key".to_string(),
             "claude-test".to_string(),
             2048,
-        );
+        )
+        .expect("valid URL should succeed");
         // Verify the provider is created with the configured client
         assert_eq!(provider.config.model, "claude-test");
         assert_eq!(provider.config.max_tokens, 2048);
@@ -628,7 +661,8 @@ mod tests {
             "test-key".to_string(),
             "test-model".to_string(),
             1024,
-        );
+        )
+        .expect("valid URL should succeed");
         assert_eq!(config.model, "test-model");
         assert_eq!(config.max_tokens, 1024);
         assert_eq!(config.base_url, "https://api.example.com");
@@ -639,5 +673,34 @@ mod tests {
     fn test_invalid_config_error_display() {
         let error = AiError::InvalidConfig("bad url".to_string());
         assert!(error.to_string().contains("bad url"));
+    }
+
+    #[test]
+    fn test_provider_config_rejects_invalid_url() {
+        let result = ProviderConfig::new(
+            "not-a-valid-url".to_string(),
+            "key".to_string(),
+            "model".to_string(),
+            1024,
+        );
+        assert!(result.is_err());
+        if let Err(AiError::InvalidConfig(msg)) = result {
+            assert!(msg.contains("base_url"));
+        } else {
+            panic!("Expected InvalidConfig error");
+        }
+    }
+
+    #[test]
+    fn test_provider_config_accepts_valid_url() {
+        let result = ProviderConfig::new(
+            "https://api.example.com".to_string(),
+            "key".to_string(),
+            "model".to_string(),
+            1024,
+        );
+        assert!(result.is_ok());
+        let config = result.unwrap();
+        assert_eq!(config.base_url, "https://api.example.com");
     }
 }

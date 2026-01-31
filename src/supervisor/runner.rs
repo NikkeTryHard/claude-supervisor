@@ -647,6 +647,16 @@ impl Supervisor {
                 session_id: self.session_id.clone(),
                 cost_usd: None,
             }),
+            ClaudeEvent::ToolResult(result) => {
+                display::print_tool_result(&result.tool_use_id, &result.content, result.is_error);
+                tracing::debug!(
+                    tool_use_id = %result.tool_use_id,
+                    is_error = result.is_error,
+                    content_len = result.content.len(),
+                    "Tool result received"
+                );
+                EventAction::Continue
+            }
             _ => EventAction::Continue,
         }
     }
@@ -796,11 +806,7 @@ mod tests {
             session_id: "test-session".to_string(),
             mcp_servers: vec![],
             subtype: None,
-            permission_mode: None,
-            claude_code_version: None,
-            agents: vec![],
-            skills: vec![],
-            slash_commands: vec![],
+            ..Default::default()
         });
 
         tx.send(init).await.unwrap();
@@ -885,6 +891,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_supervisor_handles_tool_result() {
+        let (mut supervisor, tx) = create_test_supervisor();
+
+        tx.send(ClaudeEvent::ToolResult(crate::cli::ToolResult {
+            tool_use_id: "tool-123".to_string(),
+            content: "File contents here".to_string(),
+            is_error: false,
+        }))
+        .await
+        .unwrap();
+
+        drop(tx);
+
+        let result = supervisor.run_without_process().await.unwrap();
+        assert!(matches!(result, SupervisorResult::ProcessExited));
+
+        let recent = supervisor.recent_events(10);
+        assert_eq!(recent.len(), 1);
+        assert!(matches!(recent[0], ClaudeEvent::ToolResult(_)));
+    }
+
+    #[tokio::test]
     async fn test_supervisor_with_strict_policy() {
         let (tx, rx) = mpsc::channel(32);
         let policy = PolicyEngine::new(PolicyLevel::Strict);
@@ -926,11 +954,7 @@ mod tests {
             session_id: "test-session".to_string(),
             mcp_servers: vec![],
             subtype: None,
-            permission_mode: None,
-            claude_code_version: None,
-            agents: vec![],
-            skills: vec![],
-            slash_commands: vec![],
+            ..Default::default()
         });
         tx.send(init).await.unwrap();
 
@@ -960,11 +984,7 @@ mod tests {
             session_id: "test-session".to_string(),
             mcp_servers: vec![],
             subtype: None,
-            permission_mode: None,
-            claude_code_version: None,
-            agents: vec![],
-            skills: vec![],
-            slash_commands: vec![],
+            ..Default::default()
         });
         tx.send(init).await.unwrap();
         drop(tx);

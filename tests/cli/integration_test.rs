@@ -18,11 +18,7 @@ fn all_event_types_exported() {
         session_id: "test".to_string(),
         mcp_servers: vec![],
         subtype: Some("init".to_string()),
-        permission_mode: None,
-        claude_code_version: None,
-        agents: vec![],
-        skills: vec![],
-        slash_commands: vec![],
+        ..Default::default()
     };
     assert_eq!(init.subtype, Some("init".to_string()));
 
@@ -114,11 +110,7 @@ fn helper_methods_work() {
         session_id: "session_123".to_string(),
         mcp_servers: vec![],
         subtype: Some("init".to_string()),
-        permission_mode: None,
-        claude_code_version: None,
-        agents: vec![],
-        skills: vec![],
-        slash_commands: vec![],
+        ..Default::default()
     });
     assert_eq!(system_event.session_id(), Some("session_123"));
     assert_eq!(result_event.session_id(), Some("abc"));

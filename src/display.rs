@@ -69,16 +69,17 @@ pub fn print_session_end(
     result_msg: Option<&str>,
 ) {
     let ts = timestamp();
-    let sid_str = session_id.map_or(String::new(), |id| {
-        format!("session_id={}", truncate(id, 20))
-    });
-    let sid = sid_str.dimmed();
     if is_error {
         println!(
             "{} {} Session ended with error {}",
             ts.dimmed(),
             "[SESSION]".red().bold(),
-            sid
+            session_id
+                .map_or(String::new(), |id| format!(
+                    "session_id={}",
+                    truncate(id, 20)
+                ))
+                .dimmed()
         );
         if let Some(msg) = result_msg {
             if !msg.is_empty() {
@@ -97,14 +98,24 @@ pub fn print_session_end(
             ts.dimmed(),
             "[SESSION]".blue().bold(),
             cost,
-            sid
+            session_id
+                .map_or(String::new(), |id| format!(
+                    "session_id={}",
+                    truncate(id, 20)
+                ))
+                .dimmed()
         );
     } else {
         println!(
             "{} {} Session completed {}",
             ts.dimmed(),
             "[SESSION]".blue().bold(),
-            sid
+            session_id
+                .map_or(String::new(), |id| format!(
+                    "session_id={}",
+                    truncate(id, 20)
+                ))
+                .dimmed()
         );
     }
     let _ = io::stdout().flush();
@@ -169,6 +180,28 @@ pub fn print_thinking(text: &str) {
 /// Print text content.
 pub fn print_text(text: &str) {
     print!("{text}");
+    let _ = io::stdout().flush();
+}
+
+/// Print tool result output.
+pub fn print_tool_result(tool_use_id: &str, content: &str, is_error: bool) {
+    let id_short = truncate(tool_use_id, 12);
+    let content_short = truncate(content, 150);
+    if is_error {
+        println!(
+            "{} {} {}",
+            "[RESULT]".red().bold(),
+            id_short.dimmed(),
+            content_short
+        );
+    } else {
+        println!(
+            "{} {} {}",
+            "[RESULT]".green().bold(),
+            id_short.dimmed(),
+            content_short
+        );
+    }
     let _ = io::stdout().flush();
 }
 
@@ -263,5 +296,13 @@ mod tests {
         let input = serde_json::json!(42);
         let formatted = format_tool_input(&input);
         assert_eq!(formatted, "42");
+    }
+
+    #[test]
+    fn test_print_tool_result_truncates_long_content() {
+        let long_content = "a".repeat(200);
+        let truncated = truncate(&long_content, 150);
+        assert!(truncated.len() <= 150);
+        assert!(truncated.ends_with("..."));
     }
 }

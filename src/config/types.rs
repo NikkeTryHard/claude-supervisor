@@ -82,6 +82,9 @@ pub struct SupervisorConfig {
     pub stop: StopConfig,
     #[serde(default)]
     pub worktree: WorktreeConfig,
+    /// Show detailed activity output.
+    #[serde(default)]
+    pub show_activity: bool,
 }
 
 impl Default for SupervisorConfig {
@@ -97,6 +100,7 @@ impl Default for SupervisorConfig {
             ai_supervisor: true,
             stop: StopConfig::default(),
             worktree: WorktreeConfig::default(),
+            show_activity: false,
         }
     }
 }
@@ -143,5 +147,11 @@ mod tests {
         assert_eq!(config.provider, ProviderKind::Claude);
         assert_eq!(config.model, "claude-sonnet-4-20250514");
         assert_eq!(config.base_url, "https://api.anthropic.com");
+    }
+
+    #[test]
+    fn test_supervisor_config_show_activity_default_false() {
+        let config = SupervisorConfig::default();
+        assert!(!config.show_activity);
     }
 }

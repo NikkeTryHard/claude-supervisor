@@ -661,12 +661,13 @@ impl Supervisor {
                 tool_use_result, ..
             } => {
                 // User events contain tool results from Claude Code
-                if let Some(result_text) = tool_use_result {
-                    display::print_tool_result(
-                        "user",
-                        result_text,
-                        result_text.contains("error") || result_text.contains("Error"),
-                    );
+                if let Some(result_value) = tool_use_result {
+                    let result_text = match &result_value {
+                        serde_json::Value::String(s) => s.clone(),
+                        other => other.to_string(),
+                    };
+                    let is_error = result_text.contains("error") || result_text.contains("Error");
+                    display::print_tool_result("user", &result_text, is_error);
                     tracing::debug!(
                         content_len = result_text.len(),
                         "Tool result from user event"

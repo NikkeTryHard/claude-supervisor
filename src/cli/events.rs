@@ -128,9 +128,9 @@ pub enum ClaudeEvent {
     User {
         /// Message content (flexible structure).
         message: serde_json::Value,
-        /// Tool use result summary (if present).
+        /// Tool use result summary (if present, can be string or object).
         #[serde(default)]
-        tool_use_result: Option<String>,
+        tool_use_result: Option<serde_json::Value>,
     },
     /// Tool use request.
     ToolUse(ToolUse),

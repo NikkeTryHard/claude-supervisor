@@ -5,6 +5,57 @@
 
 use serde::{Deserialize, Serialize};
 
+/// A Claude event with its original raw JSON preserved.
+///
+/// This wrapper stores the original JSON string alongside the parsed event,
+/// ensuring no information is lost during parsing.
+#[derive(Debug, Clone)]
+pub struct RawClaudeEvent {
+    /// The original JSON string.
+    raw: String,
+    /// The parsed event.
+    event: ClaudeEvent,
+}
+
+impl RawClaudeEvent {
+    /// Parse a JSON string into a `RawClaudeEvent`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the JSON cannot be parsed as a `ClaudeEvent`.
+    pub fn parse(json: &str) -> Result<Self, serde_json::Error> {
+        let event: ClaudeEvent = serde_json::from_str(json)?;
+        Ok(Self {
+            raw: json.to_string(),
+            event,
+        })
+    }
+
+    /// Get the original raw JSON string.
+    #[must_use]
+    pub fn raw(&self) -> &str {
+        &self.raw
+    }
+
+    /// Get the parsed event.
+    #[must_use]
+    pub fn event(&self) -> &ClaudeEvent {
+        &self.event
+    }
+
+    /// Consume self and return the parsed event.
+    #[must_use]
+    pub fn into_event(self) -> ClaudeEvent {
+        self.event
+    }
+
+    /// Consume self and return both raw JSON and parsed event.
+    #[must_use]
+    pub fn into_parts(self) -> (String, ClaudeEvent) {
+        (self.raw, self.event)
+    }
+}
+
 /// MCP server status.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct McpServer {
@@ -193,5 +244,28 @@ impl ClaudeEvent {
             Self::Result(result) => Some(&result.session_id),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_raw_event_preserves_json() {
+        let json = r#"{"type":"system","cwd":"/tmp","tools":[],"model":"test","session_id":"abc","mcp_servers":[]}"#;
+        let raw = RawClaudeEvent::parse(json).unwrap();
+
+        assert_eq!(raw.raw(), json);
+        assert!(matches!(raw.event(), ClaudeEvent::System(_)));
+    }
+
+    #[test]
+    fn test_raw_event_preserves_unknown_fields() {
+        let json = r#"{"type":"system","cwd":"/tmp","tools":[],"model":"test","session_id":"abc","mcp_servers":[],"new_field":"preserved"}"#;
+        let raw = RawClaudeEvent::parse(json).unwrap();
+
+        assert_eq!(raw.raw(), json);
+        assert!(raw.raw().contains("new_field"));
     }
 }
